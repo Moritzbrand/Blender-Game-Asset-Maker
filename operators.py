@@ -6,6 +6,7 @@ import bpy
 from .scripts.baking_utils import BakingUtils
 from .scripts.cycles_utils import CyclesUtils
 from .scripts.export_utils import ExportUtils
+from .scripts.image_utils import ImageUtils
 from .scripts.material_utils import MaterialUtils
 from .scripts.mesh_utils import MeshUtils
 from .scripts.object_utils import ObjectUtils
@@ -127,7 +128,7 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                 )
 
                 if scene.gameready_flip_y_normal:
-                    BakingUtils.flip_normal_map_y(created_images["normal"])
+                    ImageUtils.flip_normal_map_y(created_images["normal"])
 
             if scene.gameready_bake_ao and "ao" in created_images:
                 BakingUtils.bake_ao_selected_to_active(
@@ -180,16 +181,16 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                         margin=bake_margin,
                     )
 
-                    BakingUtils.debug_grayscale_range(
+                    ImageUtils.debug_grayscale_range(
                         created_images["base_color_alpha_tmp"],
                         "Alpha TMP",
                     )
-                    BakingUtils.combine_rgb_and_alpha_images(
+                    ImageUtils.combine_rgb_and_alpha_images(
                         created_images["base_color_rgb_tmp"],
                         created_images["base_color_alpha_tmp"],
                         created_images["base_color"],
                     )
-                    BakingUtils.debug_grayscale_range(
+                    ImageUtils.debug_grayscale_range(
                         created_images["base_color"],
                         "Final BaseColor",
                     )
@@ -242,7 +243,7 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                 and "metallic" in created_images
                 and "orm" in created_images
             ):
-                BakingUtils.combine_orm_images(
+                ImageUtils.combine_orm_images(
                     created_images["ao"],
                     created_images["roughness"],
                     created_images["metallic"],

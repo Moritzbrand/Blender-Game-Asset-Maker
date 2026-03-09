@@ -1,4 +1,5 @@
 from .baking_utils import BakingUtils
+from .image_utils import ImageUtils
 from .cycles_utils import CyclesUtils
 from .export_utils import ExportUtils
 from .material_utils import MaterialUtils
@@ -7,6 +8,7 @@ from .object_utils import ObjectUtils
 
 __all__ = [
     "BakingUtils",
+    "ImageUtils",
     "CyclesUtils",
     "ExportUtils",
     "MaterialUtils",
