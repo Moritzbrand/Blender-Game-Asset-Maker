@@ -1,0 +1,264 @@
+# operators.py
+
+import bpy 
+from .scripts import *
+
+class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
+    bl_idname = "gameready.create_game_asset"
+    bl_label = "Create Game Asset"
+    bl_description = "Create a game asset from the active object"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        for obj in context.selected_objects:
+            if obj.type != 'MESH':
+                return False
+        return context.active_object is not None and context.mode == 'OBJECT' and context.active_object.type == 'MESH'
+
+    def execute(self, context):
+        scene = context.scene
+        obj = context.active_object
+        selected_objects = list(context.selected_objects)
+
+        # -------------------------
+        # High-poly bake source
+        # -------------------------
+        temporary_objects = duplicate_selected(context)
+
+        if scene.gameready_apply_rot_scale:
+            apply_transform_to_selected(context)
+
+        apply_modifiers_to_selected(context)
+        temporary_obj = join_objects(context, temporary_objects)
+        temporary_obj.name = f"{obj.name}_temp"
+
+        # -------------------------
+        # Low-poly game asset inputs
+        # -------------------------
+        select_objects(context, selected_objects)
+        new_objects = duplicate_selected(context)
+
+        if scene.gameready_unsubdivide:
+            add_unsubdivide_to_objects(
+                new_objects,
+                scene.gameready_unsubdivide_iterations * 2,
+            )
+
+        if scene.gameready_apply_rot_scale:
+            apply_transform_to_selected(context)
+
+        apply_modifiers_to_selected(context)
+
+        game_asset = union(context, new_objects)
+        game_asset.name = f"{obj.name}_game"
+        
+        
+
+        if scene.gameready_merge_by_distance:
+            merge_distance = scene.gameready_merge_distance
+            merge_by_distance(context, game_asset, merge_distance)
+
+        if scene.gameready_collapse:
+            decimate_collapse(game_asset,scene.gameready_collapse_ratio)
+
+        if scene.gameready_remove_planar_vertices:
+            angle_limit = scene.gameready_planar_angle_limit
+            decimate_planar(game_asset, angle_limit)
+
+        if scene.gameready_triangulate:
+            triangulate_object(game_asset)
+
+        remove_custom_normals(game_asset)
+        bpy.context.view_layer.objects.active = game_asset
+        game_asset.select_set(True)
+        if scene.gameready_shade_auto_smooth:
+            bpy.ops.object.shade_auto_smooth(angle=math.radians(scene.gameready_auto_smooth_angle))
+        else:
+            bpy.ops.object.shade_flat()
+
+        if scene.gameready_uv_unwrap:
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.select_all(action='SELECT')
+            bpy.ops.uv.smart_project(island_margin=0.03)
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+        
+        if scene.gameready_bake_textures:
+            CyclesUtils.configure_cycles(context.scene, samples=scene.gameready_sample_count)
+            _, created_images = MaterialUtils.setup_bake_material(game_asset, scene)
+
+            rendered_objects = get_all_rendered_objects(context)
+            objects_to_hide = [
+                obj for obj in rendered_objects
+                if obj not in {temporary_obj, game_asset}
+            ]
+            visibility_state = store_render_visibility(objects_to_hide)
+            hide_from_render(objects_to_hide)
+
+
+            texture_size = int(scene.gameready_texture_size)
+            bake_margin = texture_size // 8
+
+
+            if scene.gameready_bake_normal and "normal" in created_images:
+                MaterialUtils.bake_normal_selected_to_active(
+                    context=context,
+                    source_obj=temporary_obj,
+                    target_obj=game_asset,
+                    target_image=created_images["normal"],
+                    extrusion=scene.gameready_cage_extrusion,
+                    margin=bake_margin,
+                )
+
+                if scene.gameready_flip_y_normal:
+                    MaterialUtils.flip_normal_map_y(created_images["normal"])
+
+            if scene.gameready_bake_ao and "ao" in created_images:
+                MaterialUtils.bake_ao_selected_to_active(
+                    context=context,
+                    source_obj=temporary_obj,
+                    target_obj=game_asset,
+                    target_image=created_images["ao"],
+                    extrusion=scene.gameready_cage_extrusion,
+                    margin=bake_margin,
+                )
+
+            if (
+                scene.gameready_bake_base_color
+                or scene.gameready_bake_alpha
+                or scene.gameready_bake_roughness
+                or scene.gameready_bake_metallic
+                or scene.gameready_bake_emission
+            ):
+                MaterialUtils.make_materials_single_user(temporary_obj)
+
+            if scene.gameready_bake_base_color and "base_color" in created_images:
+                if (
+                    scene.gameready_bake_alpha
+                    and "base_color_rgb_tmp" in created_images
+                    and "base_color_alpha_tmp" in created_images
+                ):
+                    # 1) Bake RGB
+                    MaterialUtils.prepare_object_materials_for_emit_bake(temporary_obj, "BASE_COLOR")
+                    MaterialUtils.bake_emit_selected_to_active(
+                        context=context,
+                        source_obj=temporary_obj,
+                        target_obj=game_asset,
+                        target_image=created_images["base_color_rgb_tmp"],
+                        extrusion=scene.gameready_cage_extrusion,
+                        margin=bake_margin,
+                    )
+
+                    # 2) Bake Alpha
+                    MaterialUtils.prepare_object_materials_for_emit_bake(temporary_obj, "ALPHA")
+                    MaterialUtils.bake_emit_selected_to_active(
+                        context=context,
+                        source_obj=temporary_obj,
+                        target_obj=game_asset,
+                        target_image=created_images["base_color_alpha_tmp"],
+                        extrusion=scene.gameready_cage_extrusion,
+                        margin=bake_margin,
+                    )
+
+                    # 3) Combine RGB + Alpha into final RGBA texture
+                    MaterialUtils.debug_grayscale_range(created_images["base_color_alpha_tmp"], "Alpha TMP")
+                    MaterialUtils.combine_rgb_and_alpha_images(
+                        created_images["base_color_rgb_tmp"],
+                        created_images["base_color_alpha_tmp"],
+                        created_images["base_color"],
+                    )
+                    MaterialUtils.debug_grayscale_range(created_images["base_color"], "Final BaseColor")
+
+                else:
+                    # No alpha requested -> bake color directly into final texture
+                    MaterialUtils.prepare_object_materials_for_emit_bake(temporary_obj, "BASE_COLOR")
+                    MaterialUtils.bake_emit_selected_to_active(
+                        context=context,
+                        source_obj=temporary_obj,
+                        target_obj=game_asset,
+                        target_image=created_images["base_color"],
+                        extrusion=scene.gameready_cage_extrusion,
+                        margin=bake_margin,
+                    )
+
+            if scene.gameready_bake_roughness and "roughness" in created_images:
+                MaterialUtils.prepare_object_materials_for_emit_bake(temporary_obj, "ROUGHNESS")
+                MaterialUtils.bake_emit_selected_to_active(
+                    context=context,
+                    source_obj=temporary_obj,
+                    target_obj=game_asset,
+                    target_image=created_images["roughness"],
+                    extrusion=scene.gameready_cage_extrusion,
+                    margin=bake_margin,
+                )
+
+            if scene.gameready_bake_metallic and "metallic" in created_images:
+                MaterialUtils.prepare_object_materials_for_emit_bake(temporary_obj, "METALLIC")
+                MaterialUtils.bake_emit_selected_to_active(
+                    context=context,
+                    source_obj=temporary_obj,
+                    target_obj=game_asset,
+                    target_image=created_images["metallic"],
+                    extrusion=scene.gameready_cage_extrusion,
+                    margin=bake_margin,
+                )
+            
+            if (
+                scene.gameready_pack_as_orm
+                and "ao" in created_images
+                and "roughness" in created_images
+                and "metallic" in created_images
+                and "orm" in created_images
+            ):
+                MaterialUtils.combine_orm_images(
+                    created_images["ao"],
+                    created_images["roughness"],
+                    created_images["metallic"],
+                    created_images["orm"],
+                )
+
+            if scene.gameready_bake_emission and "emission" in created_images:
+                MaterialUtils.prepare_object_materials_for_emit_bake(temporary_obj, "EMISSION")
+                MaterialUtils.bake_emit_selected_to_active(
+                    context=context,
+                    source_obj=temporary_obj,
+                    target_obj=game_asset,
+                    target_image=created_images["emission"],
+                    extrusion=scene.gameready_cage_extrusion,
+                    margin=bake_margin,
+                )
+
+        
+        
+        restore_render_visibility(visibility_state)
+        # delete temporary object
+        bpy.data.objects.remove(temporary_obj, do_unlink=True)
+
+        cleanup_stats = MaterialUtils.cleanup_unused_textures_and_materials(game_asset)
+
+
+        exported_fbx_paths = []
+
+        if scene.gameready_export_fbx:
+            lod_count = scene.gameready_lod_count if scene.gameready_generate_lods else 0
+
+            exported_fbx_paths = export_object_and_lods_as_fbx(
+                context=context,
+                obj=game_asset,
+                output_dir=scene.gameready_output_dir,
+                lod_count=lod_count,
+            )
+
+        message = (
+            f"Game asset created: {obj.name} | "
+            f"Removed unplugged texture nodes: {cleanup_stats['removed_nodes']}, "
+            f"unused images: {cleanup_stats['removed_images']}, "
+            f"unused materials: {cleanup_stats['removed_materials']}"
+        )
+
+        if exported_fbx_paths:
+            message += f" | Exported FBXs: {', '.join(exported_fbx_paths)}"
+
+        self.report({'INFO'}, message)
+        return {'FINISHED'}
