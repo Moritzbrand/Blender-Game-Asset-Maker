@@ -1,525 +1,646 @@
+# Example:
+# BakingUtils.bake_normal_selected_to_active(
+#     bpy.context,
+#     high_poly_object,
+#     low_poly_object,
+#     normal_image,
+#     extrusion=0.02,
+#     margin=16,
+# )
+
 import bpy
 
 
 class BakingUtils:
-    @staticmethod
-    def _iter_renderable_layer_collections(layer_collection, parent_render_enabled=True):
+    #-----------------------------
+    #---| Member Variables |------
+    #-----------------------------
+    IMAGE_TEXTURE_NODE_TYPE = "ShaderNodeTexImage"
+    MATERIAL_OUTPUT_NODE_TYPE = "ShaderNodeOutputMaterial"
+    PRINCIPLED_BSDF_NODE_TYPE = "ShaderNodeBsdfPrincipled"
+    EMISSION_NODE_TYPE = "ShaderNodeEmission"
+
+    SUPPORTED_EMIT_CHANNEL_NAMES = {
+        "BASE_COLOR",
+        "ALPHA",
+        "ROUGHNESS",
+        "METALLIC",
+        "EMISSION",
+    }
+
+    SCALAR_EMIT_CHANNEL_NAMES = {
+        "ALPHA",
+        "ROUGHNESS",
+        "METALLIC",
+    }
+
+    EMIT_CHANNEL_TO_PRINCIPLED_INPUT_NAMES = {
+        "BASE_COLOR": ("Base Color",),
+        "ALPHA": ("Alpha",),
+        "ROUGHNESS": ("Roughness",),
+        "METALLIC": ("Metallic",),
+        "EMISSION": ("Emission Color", "Emission"),
+    }
+
+    #------------------------------------
+    #---| Render Visibility Helpers |----
+    #------------------------------------
+    @classmethod
+    def _iterate_renderable_layer_collections(
+        cls,
+        layer_collection,
+        parent_collection_can_render=True,
+    ):
         if layer_collection is None:
             return
 
-        collection = layer_collection.collection
-
-        this_render_enabled = (
-            parent_render_enabled
+        current_collection = layer_collection.collection
+        current_collection_can_render = (
+            parent_collection_can_render
             and not layer_collection.exclude
-            and not collection.hide_render
+            and not current_collection.hide_render
         )
 
-        if this_render_enabled:
+        if current_collection_can_render:
             yield layer_collection
 
-        for child in layer_collection.children:
-            yield from BakingUtils._iter_renderable_layer_collections(
-                child,
-                this_render_enabled,
+        for child_layer_collection in layer_collection.children:
+            yield from cls._iterate_renderable_layer_collections(
+                child_layer_collection,
+                current_collection_can_render,
             )
 
-    @staticmethod
-    def get_all_rendered_objects(context, include_non_mesh=False):
-        view_layer = context.view_layer
-        root = view_layer.layer_collection
+    @classmethod
+    def get_all_rendered_objects(cls, context, include_non_mesh=False):
+        root_layer_collection = context.view_layer.layer_collection
+        rendered_objects = []
+        already_added_object_names = set()
 
-        objects = []
-        seen = set()
-
-        for layer_coll in BakingUtils._iter_renderable_layer_collections(root):
-            for obj in list(layer_coll.collection.objects):
-                if obj.name in seen:
+        for renderable_layer_collection in cls._iterate_renderable_layer_collections(root_layer_collection):
+            for collection_object in list(renderable_layer_collection.collection.objects):
+                if collection_object.name in already_added_object_names:
                     continue
-                if obj.hide_render:
+                if collection_object.hide_render:
                     continue
-                if not include_non_mesh and obj.type != 'MESH':
+                if not include_non_mesh and collection_object.type != 'MESH':
                     continue
 
-                seen.add(obj.name)
-                objects.append(obj)
+                already_added_object_names.add(collection_object.name)
+                rendered_objects.append(collection_object)
 
+        return rendered_objects
+
+    @classmethod
+    def _set_objects_render_hidden_state(cls, objects, hide_from_render):
+        for scene_object in objects:
+            if scene_object is not None:
+                scene_object.hide_render = hide_from_render
         return objects
 
-    @staticmethod
-    def hide_from_render(objects):
-        for obj in objects:
-            if obj is not None:
-                obj.hide_render = True
-        return objects
+    @classmethod
+    def hide_from_render(cls, objects):
+        return cls._set_objects_render_hidden_state(objects, True)
 
-    @staticmethod
-    def show_in_render(objects):
-        for obj in objects:
-            if obj is not None:
-                obj.hide_render = False
-        return objects
+    @classmethod
+    def show_in_render(cls, objects):
+        return cls._set_objects_render_hidden_state(objects, False)
 
-    @staticmethod
-    def store_render_visibility(objects):
-        return {obj.name: obj.hide_render for obj in objects if obj is not None}
+    @classmethod
+    def store_render_visibility(cls, objects):
+        return {
+            scene_object.name: scene_object.hide_render
+            for scene_object in objects
+            if scene_object is not None
+        }
 
-    @staticmethod
-    def restore_render_visibility(state):
-        for obj_name, hide_render in state.items():
-            obj = bpy.data.objects.get(obj_name)
-            if obj is not None:
-                obj.hide_render = hide_render
+    @classmethod
+    def restore_render_visibility(cls, stored_render_visibility_by_object_name):
+        for object_name, hide_from_render in stored_render_visibility_by_object_name.items():
+            scene_object = bpy.data.objects.get(object_name)
+            if scene_object is not None:
+                scene_object.hide_render = hide_from_render
 
-    @staticmethod
-    def flip_normal_map_y(image):
+    #-----------------------------
+    #---| Public Bake API |-------
+    #-----------------------------
+    @classmethod
+    def bake_normal_selected_to_active(
+        cls,
+        context,
+        source_obj,
+        target_obj,
+        target_image,
+        extrusion,
+        margin,
+    ):
+        cls._bake_selected_to_active_image(
+            context=context,
+            source_object=source_obj,
+            target_object=target_obj,
+            target_image=target_image,
+            bake_type='NORMAL',
+            extrusion=extrusion,
+            margin=margin,
+            use_tangent_normal_space=True,
+        )
+
+    @classmethod
+    def bake_ao_selected_to_active(
+        cls,
+        context,
+        source_obj,
+        target_obj,
+        target_image,
+        extrusion,
+        margin,
+    ):
+        cls._bake_selected_to_active_image(
+            context=context,
+            source_object=source_obj,
+            target_object=target_obj,
+            target_image=target_image,
+            bake_type='AO',
+            extrusion=extrusion,
+            margin=margin,
+            use_tangent_normal_space=False,
+        )
+
+    @classmethod
+    def bake_emit_selected_to_active(
+        cls,
+        context,
+        source_obj,
+        target_obj,
+        target_image,
+        extrusion,
+        margin,
+    ):
+        cls._bake_selected_to_active_image(
+            context=context,
+            source_object=source_obj,
+            target_object=target_obj,
+            target_image=target_image,
+            bake_type='EMIT',
+            extrusion=extrusion,
+            margin=margin,
+            use_tangent_normal_space=False,
+        )
+
+    #--------------------------------
+    #---| Bake Execution Flow |------
+    #--------------------------------
+    @classmethod
+    def _bake_selected_to_active_image(
+        cls,
+        context,
+        source_object,
+        target_object,
+        target_image,
+        bake_type,
+        extrusion,
+        margin,
+        use_tangent_normal_space,
+    ):
+        cls._require_mesh_object(source_object, "source_object")
+        cls._require_mesh_object(target_object, "target_object")
+        cls._require_image(target_image, "target_image")
+
+        cls._ensure_object_mode(context)
+        cls._prepare_selected_to_active_bake_selection(
+            context=context,
+            source_object=source_object,
+            target_object=target_object,
+        )
+
+        target_material = cls._require_active_node_material(target_object)
+        target_nodes = target_material.node_tree.nodes
+
+        target_image_texture_node = cls._require_image_texture_node_for_image(
+            nodes=target_nodes,
+            target_image=target_image,
+        )
+
+        cls._make_node_the_only_active_bake_target(
+            nodes=target_nodes,
+            active_node=target_image_texture_node,
+        )
+
+        cls._configure_scene_for_selected_to_active_bake(
+            scene=context.scene,
+            extrusion=extrusion,
+            margin=margin,
+            use_tangent_normal_space=use_tangent_normal_space,
+        )
+
+        bpy.ops.object.bake(
+            type=bake_type,
+            use_selected_to_active=True,
+            cage_extrusion=extrusion,
+            margin=margin,
+        )
+
+        cls._save_image_if_possible(target_image)
+
+    @classmethod
+    def _ensure_object_mode(cls, context):
+        if context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+    @classmethod
+    def _prepare_selected_to_active_bake_selection(
+        cls,
+        context,
+        source_object,
+        target_object,
+    ):
+        for selected_object in list(context.selected_objects):
+            selected_object.select_set(False)
+
+        source_object.select_set(True)
+        target_object.select_set(True)
+        context.view_layer.objects.active = target_object
+
+    @classmethod
+    def _configure_scene_for_selected_to_active_bake(
+        cls,
+        scene,
+        extrusion,
+        margin,
+        use_tangent_normal_space,
+    ):
+        bake_settings = scene.render.bake
+        bake_settings.use_selected_to_active = True
+        bake_settings.cage_extrusion = extrusion
+        bake_settings.margin = margin
+        bake_settings.target = 'IMAGE_TEXTURES'
+        bake_settings.use_clear = True
+
+        if use_tangent_normal_space and hasattr(bake_settings, "normal_space"):
+            bake_settings.normal_space = 'TANGENT'
+
+    @classmethod
+    def _make_node_the_only_active_bake_target(cls, nodes, active_node):
+        for node in nodes:
+            node.select = False
+
+        active_node.select = True
+        nodes.active = active_node
+
+    #----------------------------------
+    #---| Validation and Lookups |-----
+    #----------------------------------
+    @classmethod
+    def _require_mesh_object(cls, scene_object, argument_name):
+        if scene_object is None:
+            raise ValueError(f"{argument_name} is required")
+        if scene_object.type != 'MESH':
+            raise ValueError(f"{argument_name} must be a mesh object")
+
+    @classmethod
+    def _require_image(cls, image, argument_name):
         if image is None:
-            raise ValueError("Image is required")
+            raise ValueError(f"{argument_name} is required")
 
-        pixels = list(image.pixels)
+    @classmethod
+    def _require_active_node_material(cls, mesh_object):
+        active_material = mesh_object.active_material
+        if active_material is None or not active_material.use_nodes or active_material.node_tree is None:
+            raise ValueError("Target object needs an active node material")
+        return active_material
 
-        if not pixels:
+    @classmethod
+    def _require_image_texture_node_for_image(cls, nodes, target_image):
+        for node in nodes:
+            if node.bl_idname == cls.IMAGE_TEXTURE_NODE_TYPE and node.image == target_image:
+                return node
+        raise ValueError("Could not find the target image texture node")
+
+    @classmethod
+    def _get_active_material_output_node(cls, nodes):
+        for node in nodes:
+            if node.bl_idname == cls.MATERIAL_OUTPUT_NODE_TYPE and getattr(node, "is_active_output", False):
+                return node
+
+        for node in nodes:
+            if node.bl_idname == cls.MATERIAL_OUTPUT_NODE_TYPE:
+                return node
+
+        new_output_node = nodes.new(cls.MATERIAL_OUTPUT_NODE_TYPE)
+        new_output_node.location = (600, 0)
+        return new_output_node
+
+    @classmethod
+    def _get_first_principled_bsdf_node(cls, nodes):
+        for node in nodes:
+            if node.bl_idname == cls.PRINCIPLED_BSDF_NODE_TYPE:
+                return node
+        return None
+
+    @classmethod
+    def _get_principled_input_socket_for_emit_channel(cls, principled_bsdf_node, channel_name):
+        if principled_bsdf_node is None:
+            return None
+
+        input_socket_names = cls.EMIT_CHANNEL_TO_PRINCIPLED_INPUT_NAMES[channel_name]
+        for input_socket_name in input_socket_names:
+            input_socket = principled_bsdf_node.inputs.get(input_socket_name)
+            if input_socket is not None:
+                return input_socket
+
+        return None
+
+    #------------------------------
+    #---| Image Utilities |--------
+    #------------------------------
+    @classmethod
+    def flip_normal_map_y(cls, image):
+        cls._require_image(image, "image")
+
+        image_pixels = list(image.pixels)
+        if not image_pixels:
             return image
 
-        for i in range(0, len(pixels), 4):
-            pixels[i + 1] = 1.0 - pixels[i + 1]
+        for pixel_start_index in range(0, len(image_pixels), 4):
+            green_channel_index = pixel_start_index + 1
+            image_pixels[green_channel_index] = 1.0 - image_pixels[green_channel_index]
 
-        image.pixels[:] = pixels
+        cls._write_pixels_to_image(image, image_pixels)
+        return image
+
+    @classmethod
+    def _write_pixels_to_image(cls, image, image_pixels):
+        image.pixels[:] = image_pixels
         image.update()
+        cls._save_image_if_possible(image)
 
+    @classmethod
+    def _save_image_if_possible(cls, image):
         try:
             if image.filepath_raw:
                 image.save()
         except Exception:
             pass
 
-        return image
-
-    @staticmethod
-    def bake_normal_selected_to_active(context, source_obj, target_obj, target_image, extrusion, margin):
-        if source_obj is None or target_obj is None:
-            raise ValueError("Source and target objects are required")
-
-        if source_obj.type != 'MESH' or target_obj.type != 'MESH':
-            raise ValueError("Source and target must be mesh objects")
-
-        if target_image is None:
-            raise ValueError("Target image is required")
-
-        if context.mode != 'OBJECT':
-            bpy.ops.object.mode_set(mode='OBJECT')
-
-        for obj in context.selected_objects:
-            obj.select_set(False)
-
-        source_obj.select_set(True)
-        target_obj.select_set(True)
-        context.view_layer.objects.active = target_obj
-
-        mat = target_obj.active_material
-        if mat is None or not mat.use_nodes:
-            raise ValueError("Target object needs an active node material")
-
-        nodes = mat.node_tree.nodes
-
-        normal_node = None
-        for node in nodes:
-            if node.bl_idname == "ShaderNodeTexImage" and node.image == target_image:
-                normal_node = node
-                break
-
-        if normal_node is None:
-            raise ValueError("Could not find the normal image texture node")
-
-        for node in nodes:
-            node.select = False
-
-        normal_node.select = True
-        nodes.active = normal_node
-
-        scene = context.scene
-        scene.render.bake.use_selected_to_active = True
-        scene.render.bake.cage_extrusion = extrusion
-        scene.render.bake.margin = margin
-        scene.render.bake.target = 'IMAGE_TEXTURES'
-        scene.render.bake.use_clear = True
-
-        if hasattr(scene.render.bake, "normal_space"):
-            scene.render.bake.normal_space = 'TANGENT'
-
-        bpy.ops.object.bake(
-            type='NORMAL',
-            use_selected_to_active=True,
-            cage_extrusion=extrusion,
-            margin=margin,
-        )
-
+    @classmethod
+    def _configure_image_for_png_output(cls, image):
         try:
-            if target_image.filepath_raw:
-                target_image.save()
+            image.alpha_mode = 'STRAIGHT'
         except Exception:
             pass
 
-    @staticmethod
-    def bake_ao_selected_to_active(context, source_obj, target_obj, target_image, extrusion, margin):
-        if source_obj is None or target_obj is None:
-            raise ValueError("Source and target objects are required")
-
-        if source_obj.type != 'MESH' or target_obj.type != 'MESH':
-            raise ValueError("Source and target must be mesh objects")
-
-        if target_image is None:
-            raise ValueError("Target image is required")
-
-        if context.mode != 'OBJECT':
-            bpy.ops.object.mode_set(mode='OBJECT')
-
-        for obj in context.selected_objects:
-            obj.select_set(False)
-
-        source_obj.select_set(True)
-        target_obj.select_set(True)
-        context.view_layer.objects.active = target_obj
-
-        mat = target_obj.active_material
-        if mat is None or not mat.use_nodes:
-            raise ValueError("Target object needs an active node material")
-
-        nodes = mat.node_tree.nodes
-
-        ao_node = None
-        for node in nodes:
-            if node.bl_idname == "ShaderNodeTexImage" and node.image == target_image:
-                ao_node = node
-                break
-
-        if ao_node is None:
-            raise ValueError("Could not find the AO image texture node")
-
-        for node in nodes:
-            node.select = False
-
-        ao_node.select = True
-        nodes.active = ao_node
-
-        scene = context.scene
-        scene.render.bake.use_selected_to_active = True
-        scene.render.bake.cage_extrusion = extrusion
-        scene.render.bake.margin = margin
-        scene.render.bake.target = 'IMAGE_TEXTURES'
-        scene.render.bake.use_clear = True
-
-        bpy.ops.object.bake(
-            type='AO',
-            use_selected_to_active=True,
-            cage_extrusion=extrusion,
-            margin=margin,
-        )
-
         try:
-            if target_image.filepath_raw:
-                target_image.save()
+            image.file_format = 'PNG'
         except Exception:
             pass
 
-    @staticmethod
-    def _get_active_output_node(nodes):
-        for node in nodes:
-            if node.bl_idname == "ShaderNodeOutputMaterial" and getattr(node, "is_active_output", False):
-                return node
+    @classmethod
+    def _require_matching_image_sizes(cls, images, error_message):
+        image_sizes = [tuple(image.size) for image in images]
+        first_image_size = image_sizes[0]
 
-        for node in nodes:
-            if node.bl_idname == "ShaderNodeOutputMaterial":
-                return node
+        for current_image_size in image_sizes[1:]:
+            if current_image_size != first_image_size:
+                raise ValueError(error_message)
 
-        node = nodes.new("ShaderNodeOutputMaterial")
-        node.location = (600, 0)
-        return node
+        return first_image_size
 
-    @staticmethod
-    def _get_first_principled_node(nodes):
-        for node in nodes:
-            if node.bl_idname == "ShaderNodeBsdfPrincipled":
-                return node
-        return None
+    #-------------------------------------
+    #---| Emit Bake Material Setup |------
+    #-------------------------------------
+    @classmethod
+    def prepare_object_materials_for_emit_bake(cls, obj, channel):
+        cls._require_mesh_object(obj, "obj")
 
-    @staticmethod
-    def _remove_links_from_socket(node_tree_links, socket):
-        for link in list(socket.links):
-            node_tree_links.remove(link)
+        normalized_channel_name = channel.upper()
+        if normalized_channel_name not in cls.SUPPORTED_EMIT_CHANNEL_NAMES:
+            raise ValueError(f"Unsupported channel: {normalized_channel_name}")
 
-    @staticmethod
-    def _socket_default_to_rgba(socket):
-        value = getattr(socket, "default_value", 0.0)
+        for material_slot in obj.material_slots:
+            material = material_slot.material
+            if material is None:
+                continue
 
-        if isinstance(value, (int, float)):
-            v = float(value)
-            return (v, v, v, 1.0)
+            if not material.use_nodes:
+                material.use_nodes = True
+
+            node_tree = material.node_tree
+            if node_tree is None:
+                continue
+
+            nodes = node_tree.nodes
+            links = node_tree.links
+
+            output_node = cls._get_active_material_output_node(nodes)
+            principled_bsdf_node = cls._get_first_principled_bsdf_node(nodes)
+
+            cls._remove_existing_emit_bake_proxy_nodes(nodes)
+
+            material_surface_input_socket = output_node.inputs.get("Surface")
+            if material_surface_input_socket is None:
+                continue
+
+            cls._remove_all_links_from_socket(links, material_surface_input_socket)
+
+            emission_proxy_node = cls._create_emit_bake_proxy_node(
+                nodes=nodes,
+                output_node=output_node,
+                channel_name=normalized_channel_name,
+            )
+
+            source_input_socket = cls._get_principled_input_socket_for_emit_channel(
+                principled_bsdf_node=principled_bsdf_node,
+                channel_name=normalized_channel_name,
+            )
+
+            if source_input_socket is not None:
+                if source_input_socket.is_linked and len(source_input_socket.links) > 0:
+                    source_output_socket = source_input_socket.links[0].from_socket
+                    cls._connect_source_socket_to_emission_proxy(
+                        source_socket=source_output_socket,
+                        emission_proxy_node=emission_proxy_node,
+                        links=links,
+                    )
+                else:
+                    cls._apply_unlinked_socket_default_to_emission_proxy(
+                        source_input_socket=source_input_socket,
+                        channel_name=normalized_channel_name,
+                        emission_proxy_node=emission_proxy_node,
+                    )
+
+            links.new(emission_proxy_node.outputs["Emission"], material_surface_input_socket)
+
+    @classmethod
+    def _remove_existing_emit_bake_proxy_nodes(cls, nodes):
+        for node in list(nodes):
+            if node.name.startswith("GR_EmitBakeProxy") or node.name.startswith("GR_EmitBakeHelper"):
+                nodes.remove(node)
+
+    @classmethod
+    def _create_emit_bake_proxy_node(cls, nodes, output_node, channel_name):
+        emission_proxy_node = nodes.new(cls.EMISSION_NODE_TYPE)
+        emission_proxy_node.name = "GR_EmitBakeProxy"
+        emission_proxy_node.label = f"GR Emit Bake {channel_name.title()}"
+        emission_proxy_node.location = (output_node.location.x - 260, output_node.location.y)
+        emission_proxy_node.inputs["Color"].default_value = (0.0, 0.0, 0.0, 1.0)
+        emission_proxy_node.inputs["Strength"].default_value = 1.0
+        return emission_proxy_node
+
+    @classmethod
+    def _remove_all_links_from_socket(cls, links, socket):
+        for existing_link in list(socket.links):
+            links.remove(existing_link)
+
+    @classmethod
+    def _connect_source_socket_to_emission_proxy(
+        cls,
+        source_socket,
+        emission_proxy_node,
+        links,
+    ):
+        source_socket_type = getattr(source_socket, "type", None)
+
+        if source_socket_type in {"VALUE", "INT", "BOOLEAN"}:
+            emission_proxy_node.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+            links.new(source_socket, emission_proxy_node.inputs["Strength"])
+            return
+
+        links.new(source_socket, emission_proxy_node.inputs["Color"])
+
+    @classmethod
+    def _apply_unlinked_socket_default_to_emission_proxy(
+        cls,
+        source_input_socket,
+        channel_name,
+        emission_proxy_node,
+    ):
+        if channel_name == "BASE_COLOR":
+            emission_proxy_node.inputs["Color"].default_value = cls._convert_socket_default_value_to_rgba(source_input_socket)
+            return
+
+        if channel_name in cls.SCALAR_EMIT_CHANNEL_NAMES:
+            default_rgba = cls._convert_socket_default_value_to_rgba(source_input_socket)
+            grayscale_value = float(default_rgba[0])
+            emission_proxy_node.inputs["Color"].default_value = (
+                grayscale_value,
+                grayscale_value,
+                grayscale_value,
+                1.0,
+            )
+
+    @classmethod
+    def _convert_socket_default_value_to_rgba(cls, socket):
+        default_value = getattr(socket, "default_value", 0.0)
+
+        if isinstance(default_value, (int, float)):
+            grayscale_value = float(default_value)
+            return (grayscale_value, grayscale_value, grayscale_value, 1.0)
 
         try:
-            values = list(value)
-            if len(values) >= 4:
+            default_value_items = list(default_value)
+
+            if len(default_value_items) >= 4:
                 return (
-                    float(values[0]),
-                    float(values[1]),
-                    float(values[2]),
-                    float(values[3]),
+                    float(default_value_items[0]),
+                    float(default_value_items[1]),
+                    float(default_value_items[2]),
+                    float(default_value_items[3]),
                 )
-            if len(values) == 3:
+
+            if len(default_value_items) == 3:
                 return (
-                    float(values[0]),
-                    float(values[1]),
-                    float(values[2]),
+                    float(default_value_items[0]),
+                    float(default_value_items[1]),
+                    float(default_value_items[2]),
                     1.0,
                 )
-            if len(values) == 1:
-                v = float(values[0])
-                return (v, v, v, 1.0)
+
+            if len(default_value_items) == 1:
+                grayscale_value = float(default_value_items[0])
+                return (grayscale_value, grayscale_value, grayscale_value, 1.0)
         except TypeError:
             pass
 
         return (0.0, 0.0, 0.0, 1.0)
 
-    @staticmethod
-    def _clear_emit_bake_proxy_nodes(nodes):
-        for node in list(nodes):
-            if node.name.startswith("GR_EmitBakeProxy") or node.name.startswith("GR_EmitBakeHelper"):
-                nodes.remove(node)
+    #-----------------------------------
+    #---| Image Packing and Debug |-----
+    #-----------------------------------
+    @classmethod
+    def combine_orm_images(
+        cls,
+        ao_image,
+        roughness_image,
+        metallic_image,
+        target_image,
+    ):
+        cls._require_image(ao_image, "ao_image")
+        cls._require_image(roughness_image, "roughness_image")
+        cls._require_image(metallic_image, "metallic_image")
+        cls._require_image(target_image, "target_image")
 
-    @staticmethod
-    def _connect_socket_to_emission(source_socket, emit_node, links):
-        socket_type = getattr(source_socket, "type", None)
+        cls._require_matching_image_sizes(
+            images=[ao_image, roughness_image, metallic_image, target_image],
+            error_message="All ORM images must have the same size",
+        )
 
-        if socket_type in {"VALUE", "INT", "BOOLEAN"}:
-            emit_node.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
-            links.new(source_socket, emit_node.inputs["Strength"])
-        else:
-            links.new(source_socket, emit_node.inputs["Color"])
-
-    @staticmethod
-    def prepare_object_materials_for_emit_bake(obj, channel):
-        if obj is None or obj.type != 'MESH':
-            raise ValueError("Object must be a mesh")
-
-        channel = channel.upper()
-        if channel not in {"BASE_COLOR", "ALPHA", "ROUGHNESS", "METALLIC", "EMISSION"}:
-            raise ValueError(f"Unsupported channel: {channel}")
-
-        for slot in obj.material_slots:
-            mat = slot.material
-            if mat is None:
-                continue
-
-            if not mat.use_nodes:
-                mat.use_nodes = True
-
-            node_tree = mat.node_tree
-            nodes = node_tree.nodes
-            links = node_tree.links
-
-            output = BakingUtils._get_active_output_node(nodes)
-            bsdf = BakingUtils._get_first_principled_node(nodes)
-
-            BakingUtils._clear_emit_bake_proxy_nodes(nodes)
-
-            surface_input = output.inputs.get("Surface")
-            if surface_input is None:
-                continue
-
-            BakingUtils._remove_links_from_socket(links, surface_input)
-
-            emit = nodes.new("ShaderNodeEmission")
-            emit.name = "GR_EmitBakeProxy"
-            emit.label = f"GR Emit Bake {channel.title()}"
-            emit.location = (output.location.x - 260, output.location.y)
-            emit.inputs["Color"].default_value = (0.0, 0.0, 0.0, 1.0)
-            emit.inputs["Strength"].default_value = 1.0
-
-            source_input = None
-            if bsdf is not None:
-                if channel == "BASE_COLOR":
-                    source_input = bsdf.inputs.get("Base Color")
-                elif channel == "ALPHA":
-                    source_input = bsdf.inputs.get("Alpha")
-                elif channel == "ROUGHNESS":
-                    source_input = bsdf.inputs.get("Roughness")
-                elif channel == "METALLIC":
-                    source_input = bsdf.inputs.get("Metallic")
-                elif channel == "EMISSION":
-                    source_input = bsdf.inputs.get("Emission Color") or bsdf.inputs.get("Emission")
-
-            if source_input is not None:
-                if source_input.is_linked and len(source_input.links) > 0:
-                    source_socket = source_input.links[0].from_socket
-                    BakingUtils._connect_socket_to_emission(source_socket, emit, links)
-                elif channel == "BASE_COLOR":
-                    emit.inputs["Color"].default_value = BakingUtils._socket_default_to_rgba(source_input)
-                elif channel in {"ALPHA", "ROUGHNESS", "METALLIC"}:
-                    default_rgba = BakingUtils._socket_default_to_rgba(source_input)
-                    v = float(default_rgba[0])
-                    emit.inputs["Color"].default_value = (v, v, v, 1.0)
-
-            links.new(emit.outputs["Emission"], surface_input)
-
-    @staticmethod
-    def combine_orm_images(ao_image, roughness_image, metallic_image, target_image):
-        if ao_image is None or roughness_image is None or metallic_image is None or target_image is None:
-            raise ValueError("AO, roughness, metallic, and target images are required")
-
-        ao_size = tuple(ao_image.size)
-        roughness_size = tuple(roughness_image.size)
-        metallic_size = tuple(metallic_image.size)
-        target_size = tuple(target_image.size)
-
-        if not (ao_size == roughness_size == metallic_size == target_size):
-            raise ValueError("All ORM images must have the same size")
-
-        ao_pixels = list(ao_image.pixels)
+        ambient_occlusion_pixels = list(ao_image.pixels)
         roughness_pixels = list(roughness_image.pixels)
         metallic_pixels = list(metallic_image.pixels)
 
-        out_pixels = [0.0] * len(ao_pixels)
+        combined_orm_pixels = [0.0] * len(ambient_occlusion_pixels)
 
-        for i in range(0, len(out_pixels), 4):
-            out_pixels[i] = ao_pixels[i]
-            out_pixels[i + 1] = roughness_pixels[i]
-            out_pixels[i + 2] = metallic_pixels[i]
-            out_pixels[i + 3] = 1.0
+        for pixel_start_index in range(0, len(combined_orm_pixels), 4):
+            combined_orm_pixels[pixel_start_index + 0] = ambient_occlusion_pixels[pixel_start_index + 0]
+            combined_orm_pixels[pixel_start_index + 1] = roughness_pixels[pixel_start_index + 0]
+            combined_orm_pixels[pixel_start_index + 2] = metallic_pixels[pixel_start_index + 0]
+            combined_orm_pixels[pixel_start_index + 3] = 1.0
 
-        try:
-            target_image.alpha_mode = 'STRAIGHT'
-        except Exception:
-            pass
+        cls._configure_image_for_png_output(target_image)
+        cls._write_pixels_to_image(target_image, combined_orm_pixels)
 
-        try:
-            target_image.file_format = 'PNG'
-        except Exception:
-            pass
+    @classmethod
+    def combine_rgb_and_alpha_images(
+        cls,
+        rgb_image,
+        alpha_image,
+        target_image,
+    ):
+        cls._require_image(rgb_image, "rgb_image")
+        cls._require_image(alpha_image, "alpha_image")
+        cls._require_image(target_image, "target_image")
 
-        target_image.pixels[:] = out_pixels
-        target_image.update()
+        cls._require_matching_image_sizes(
+            images=[rgb_image, alpha_image, target_image],
+            error_message="All images must have the same size",
+        )
 
-        try:
-            if target_image.filepath_raw:
-                target_image.save()
-        except Exception:
-            pass
+        rgb_pixels = list(rgb_image.pixels)
+        alpha_pixels = list(alpha_image.pixels)
+        combined_rgba_pixels = [0.0] * len(rgb_pixels)
 
-    @staticmethod
-    def debug_grayscale_range(image, label="Image"):
+        for pixel_start_index in range(0, len(rgb_pixels), 4):
+            combined_rgba_pixels[pixel_start_index + 0] = rgb_pixels[pixel_start_index + 0]
+            combined_rgba_pixels[pixel_start_index + 1] = rgb_pixels[pixel_start_index + 1]
+            combined_rgba_pixels[pixel_start_index + 2] = rgb_pixels[pixel_start_index + 2]
+            combined_rgba_pixels[pixel_start_index + 3] = alpha_pixels[pixel_start_index + 0]
+
+        cls._configure_image_for_png_output(target_image)
+        cls._write_pixels_to_image(target_image, combined_rgba_pixels)
+
+    @classmethod
+    def debug_grayscale_range(cls, image, label="Image"):
         if image is None:
             print(f"{label}: image is None")
             return
 
-        pixels = list(image.pixels)
-        values = pixels[0::4]
+        image_pixels = list(image.pixels)
+        grayscale_values = image_pixels[0::4]
 
-        if not values:
+        if not grayscale_values:
             print(f"{label}: no pixels found")
             return
 
-        print(f"{label}: value min={min(values):.6f}, max={max(values):.6f}")
-
-    @staticmethod
-    def combine_rgb_and_alpha_images(rgb_image, alpha_image, target_image):
-        if rgb_image is None or alpha_image is None or target_image is None:
-            raise ValueError("RGB, alpha, and target images are required")
-
-        rgb_size = tuple(rgb_image.size)
-        alpha_size = tuple(alpha_image.size)
-        target_size = tuple(target_image.size)
-
-        if rgb_size != alpha_size or rgb_size != target_size:
-            raise ValueError("All images must have the same size")
-
-        rgb_pixels = list(rgb_image.pixels)
-        alpha_pixels = list(alpha_image.pixels)
-
-        out_pixels = [0.0] * len(rgb_pixels)
-
-        for i in range(0, len(rgb_pixels), 4):
-            out_pixels[i] = rgb_pixels[i]
-            out_pixels[i + 1] = rgb_pixels[i + 1]
-            out_pixels[i + 2] = rgb_pixels[i + 2]
-            out_pixels[i + 3] = alpha_pixels[i]
-
-        try:
-            target_image.alpha_mode = 'STRAIGHT'
-        except Exception:
-            pass
-
-        try:
-            target_image.file_format = 'PNG'
-        except Exception:
-            pass
-
-        target_image.pixels[:] = out_pixels
-        target_image.update()
-
-        try:
-            if target_image.filepath_raw:
-                target_image.save()
-        except Exception:
-            pass
-
-    @staticmethod
-    def bake_emit_selected_to_active(context, source_obj, target_obj, target_image, extrusion, margin):
-        if source_obj is None or target_obj is None:
-            raise ValueError("Source and target objects are required")
-
-        if source_obj.type != 'MESH' or target_obj.type != 'MESH':
-            raise ValueError("Source and target must be mesh objects")
-
-        if target_image is None:
-            raise ValueError("Target image is required")
-
-        if context.mode != 'OBJECT':
-            bpy.ops.object.mode_set(mode='OBJECT')
-
-        for obj in context.selected_objects:
-            obj.select_set(False)
-
-        source_obj.select_set(True)
-        target_obj.select_set(True)
-        context.view_layer.objects.active = target_obj
-
-        mat = target_obj.active_material
-        if mat is None or not mat.use_nodes:
-            raise ValueError("Target object needs an active node material")
-
-        nodes = mat.node_tree.nodes
-
-        target_node = None
-        for node in nodes:
-            if node.bl_idname == "ShaderNodeTexImage" and node.image == target_image:
-                target_node = node
-                break
-
-        if target_node is None:
-            raise ValueError("Could not find the target image texture node")
-
-        for node in nodes:
-            node.select = False
-
-        target_node.select = True
-        nodes.active = target_node
-
-        scene = context.scene
-        scene.render.bake.use_selected_to_active = True
-        scene.render.bake.cage_extrusion = extrusion
-        scene.render.bake.margin = margin
-        scene.render.bake.target = 'IMAGE_TEXTURES'
-        scene.render.bake.use_clear = True
-
-        bpy.ops.object.bake(
-            type='EMIT',
-            use_selected_to_active=True,
-            cage_extrusion=extrusion,
-            margin=margin,
+        print(
+            f"{label}: value min={min(grayscale_values):.6f}, "
+            f"max={max(grayscale_values):.6f}"
         )
-
-        try:
-            if target_image.filepath_raw:
-                target_image.save()
-        except Exception:
-            pass
