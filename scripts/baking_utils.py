@@ -10,8 +10,6 @@
 
 import bpy
 
-from .image_utils import ImageUtils
-
 
 class BakingUtils:
     #-----------------------------
@@ -43,6 +41,10 @@ class BakingUtils:
         "METALLIC": ("Metallic",),
         "EMISSION": ("Emission Color", "Emission"),
     }
+
+    EMISSION_STRENGTH_INPUT_NAMES = (
+        "Emission Strength",
+    )
 
     #------------------------------------
     #---| Render Visibility Helpers |----
@@ -205,7 +207,7 @@ class BakingUtils:
     ):
         cls._require_mesh_object(source_object, "source_object")
         cls._require_mesh_object(target_object, "target_object")
-        ImageUtils.require_image(target_image, "target_image")
+        cls._require_image(target_image, "target_image")
 
         cls._ensure_object_mode(context)
         cls._prepare_selected_to_active_bake_selection(
@@ -241,7 +243,7 @@ class BakingUtils:
             margin=margin,
         )
 
-        ImageUtils.save_image_if_possible(target_image)
+        cls._save_image_if_possible(target_image)
 
     @classmethod
     def _ensure_object_mode(cls, context):
@@ -299,6 +301,11 @@ class BakingUtils:
             raise ValueError(f"{argument_name} must be a mesh object")
 
     @classmethod
+    def _require_image(cls, image, argument_name):
+        if image is None:
+            raise ValueError(f"{argument_name} is required")
+
+    @classmethod
     def _require_active_node_material(cls, mesh_object):
         active_material = mesh_object.active_material
         if active_material is None or not active_material.use_nodes or active_material.node_tree is None:
@@ -339,12 +346,74 @@ class BakingUtils:
             return None
 
         input_socket_names = cls.EMIT_CHANNEL_TO_PRINCIPLED_INPUT_NAMES[channel_name]
+        return cls._get_first_existing_input_socket(principled_bsdf_node, input_socket_names)
+
+    @classmethod
+    def _get_first_existing_input_socket(cls, node, input_socket_names):
+        if node is None:
+            return None
+
         for input_socket_name in input_socket_names:
-            input_socket = principled_bsdf_node.inputs.get(input_socket_name)
+            input_socket = node.inputs.get(input_socket_name)
             if input_socket is not None:
                 return input_socket
 
         return None
+
+    #------------------------------
+    #---| Image Utilities |--------
+    #------------------------------
+    @classmethod
+    def flip_normal_map_y(cls, image):
+        cls._require_image(image, "image")
+
+        image_pixels = list(image.pixels)
+        if not image_pixels:
+            return image
+
+        for pixel_start_index in range(0, len(image_pixels), 4):
+            green_channel_index = pixel_start_index + 1
+            image_pixels[green_channel_index] = 1.0 - image_pixels[green_channel_index]
+
+        cls._write_pixels_to_image(image, image_pixels)
+        return image
+
+    @classmethod
+    def _write_pixels_to_image(cls, image, image_pixels):
+        image.pixels[:] = image_pixels
+        image.update()
+        cls._save_image_if_possible(image)
+
+    @classmethod
+    def _save_image_if_possible(cls, image):
+        try:
+            if image.filepath_raw:
+                image.save()
+        except Exception:
+            pass
+
+    @classmethod
+    def _configure_image_for_png_output(cls, image):
+        try:
+            image.alpha_mode = 'STRAIGHT'
+        except Exception:
+            pass
+
+        try:
+            image.file_format = 'PNG'
+        except Exception:
+            pass
+
+    @classmethod
+    def _require_matching_image_sizes(cls, images, error_message):
+        image_sizes = [tuple(image.size) for image in images]
+        first_image_size = image_sizes[0]
+
+        for current_image_size in image_sizes[1:]:
+            if current_image_size != first_image_size:
+                raise ValueError(error_message)
+
+        return first_image_size
 
     #-------------------------------------
     #---| Emit Bake Material Setup |------
@@ -389,25 +458,32 @@ class BakingUtils:
                 channel_name=normalized_channel_name,
             )
 
-            source_input_socket = cls._get_principled_input_socket_for_emit_channel(
-                principled_bsdf_node=principled_bsdf_node,
-                channel_name=normalized_channel_name,
-            )
+            if normalized_channel_name == "EMISSION":
+                cls._configure_emission_channel_on_emission_proxy(
+                    principled_bsdf_node=principled_bsdf_node,
+                    emission_proxy_node=emission_proxy_node,
+                    links=links,
+                )
+            else:
+                source_input_socket = cls._get_principled_input_socket_for_emit_channel(
+                    principled_bsdf_node=principled_bsdf_node,
+                    channel_name=normalized_channel_name,
+                )
 
-            if source_input_socket is not None:
-                if source_input_socket.is_linked and len(source_input_socket.links) > 0:
-                    source_output_socket = source_input_socket.links[0].from_socket
-                    cls._connect_source_socket_to_emission_proxy(
-                        source_socket=source_output_socket,
-                        emission_proxy_node=emission_proxy_node,
-                        links=links,
-                    )
-                else:
-                    cls._apply_unlinked_socket_default_to_emission_proxy(
-                        source_input_socket=source_input_socket,
-                        channel_name=normalized_channel_name,
-                        emission_proxy_node=emission_proxy_node,
-                    )
+                if source_input_socket is not None:
+                    if source_input_socket.is_linked and len(source_input_socket.links) > 0:
+                        source_output_socket = source_input_socket.links[0].from_socket
+                        cls._connect_source_socket_to_emission_proxy(
+                            source_socket=source_output_socket,
+                            emission_proxy_node=emission_proxy_node,
+                            links=links,
+                        )
+                    else:
+                        cls._apply_unlinked_socket_default_to_emission_proxy(
+                            source_input_socket=source_input_socket,
+                            channel_name=normalized_channel_name,
+                            emission_proxy_node=emission_proxy_node,
+                        )
 
             links.new(emission_proxy_node.outputs["Emission"], material_surface_input_socket)
 
@@ -447,6 +523,72 @@ class BakingUtils:
             return
 
         links.new(source_socket, emission_proxy_node.inputs["Color"])
+
+
+    @classmethod
+    def _configure_emission_channel_on_emission_proxy(
+        cls,
+        principled_bsdf_node,
+        emission_proxy_node,
+        links,
+    ):
+        emission_color_input_socket = cls._get_first_existing_input_socket(
+            principled_bsdf_node,
+            cls.EMIT_CHANNEL_TO_PRINCIPLED_INPUT_NAMES["EMISSION"],
+        )
+        emission_strength_input_socket = cls._get_first_existing_input_socket(
+            principled_bsdf_node,
+            cls.EMISSION_STRENGTH_INPUT_NAMES,
+        )
+
+        cls._apply_emission_color_to_emission_proxy(
+            emission_color_input_socket=emission_color_input_socket,
+            emission_proxy_node=emission_proxy_node,
+            links=links,
+        )
+        cls._apply_emission_strength_to_emission_proxy(
+            emission_strength_input_socket=emission_strength_input_socket,
+            emission_proxy_node=emission_proxy_node,
+            links=links,
+        )
+
+    @classmethod
+    def _apply_emission_color_to_emission_proxy(
+        cls,
+        emission_color_input_socket,
+        emission_proxy_node,
+        links,
+    ):
+        if emission_color_input_socket is None:
+            return
+
+        if emission_color_input_socket.is_linked and len(emission_color_input_socket.links) > 0:
+            emission_color_output_socket = emission_color_input_socket.links[0].from_socket
+            links.new(emission_color_output_socket, emission_proxy_node.inputs["Color"])
+            return
+
+        emission_proxy_node.inputs["Color"].default_value = cls._convert_socket_default_value_to_rgba(
+            emission_color_input_socket
+        )
+
+    @classmethod
+    def _apply_emission_strength_to_emission_proxy(
+        cls,
+        emission_strength_input_socket,
+        emission_proxy_node,
+        links,
+    ):
+        if emission_strength_input_socket is None:
+            return
+
+        if emission_strength_input_socket.is_linked and len(emission_strength_input_socket.links) > 0:
+            emission_strength_output_socket = emission_strength_input_socket.links[0].from_socket
+            links.new(emission_strength_output_socket, emission_proxy_node.inputs["Strength"])
+            return
+
+        emission_proxy_node.inputs["Strength"].default_value = cls._convert_socket_default_value_to_scalar(
+            emission_strength_input_socket
+        )
 
     @classmethod
     def _apply_unlinked_socket_default_to_emission_proxy(
@@ -503,3 +645,103 @@ class BakingUtils:
             pass
 
         return (0.0, 0.0, 0.0, 1.0)
+
+
+    @classmethod
+    def _convert_socket_default_value_to_scalar(cls, socket):
+        default_value = getattr(socket, "default_value", 0.0)
+
+        if isinstance(default_value, (int, float)):
+            return float(default_value)
+
+        try:
+            default_value_items = list(default_value)
+            if default_value_items:
+                return float(default_value_items[0])
+        except TypeError:
+            pass
+
+        return 0.0
+
+    #-----------------------------------
+    #---| Image Packing and Debug |-----
+    #-----------------------------------
+    @classmethod
+    def combine_orm_images(
+        cls,
+        ao_image,
+        roughness_image,
+        metallic_image,
+        target_image,
+    ):
+        cls._require_image(ao_image, "ao_image")
+        cls._require_image(roughness_image, "roughness_image")
+        cls._require_image(metallic_image, "metallic_image")
+        cls._require_image(target_image, "target_image")
+
+        cls._require_matching_image_sizes(
+            images=[ao_image, roughness_image, metallic_image, target_image],
+            error_message="All ORM images must have the same size",
+        )
+
+        ambient_occlusion_pixels = list(ao_image.pixels)
+        roughness_pixels = list(roughness_image.pixels)
+        metallic_pixels = list(metallic_image.pixels)
+
+        combined_orm_pixels = [0.0] * len(ambient_occlusion_pixels)
+
+        for pixel_start_index in range(0, len(combined_orm_pixels), 4):
+            combined_orm_pixels[pixel_start_index + 0] = ambient_occlusion_pixels[pixel_start_index + 0]
+            combined_orm_pixels[pixel_start_index + 1] = roughness_pixels[pixel_start_index + 0]
+            combined_orm_pixels[pixel_start_index + 2] = metallic_pixels[pixel_start_index + 0]
+            combined_orm_pixels[pixel_start_index + 3] = 1.0
+
+        cls._configure_image_for_png_output(target_image)
+        cls._write_pixels_to_image(target_image, combined_orm_pixels)
+
+    @classmethod
+    def combine_rgb_and_alpha_images(
+        cls,
+        rgb_image,
+        alpha_image,
+        target_image,
+    ):
+        cls._require_image(rgb_image, "rgb_image")
+        cls._require_image(alpha_image, "alpha_image")
+        cls._require_image(target_image, "target_image")
+
+        cls._require_matching_image_sizes(
+            images=[rgb_image, alpha_image, target_image],
+            error_message="All images must have the same size",
+        )
+
+        rgb_pixels = list(rgb_image.pixels)
+        alpha_pixels = list(alpha_image.pixels)
+        combined_rgba_pixels = [0.0] * len(rgb_pixels)
+
+        for pixel_start_index in range(0, len(rgb_pixels), 4):
+            combined_rgba_pixels[pixel_start_index + 0] = rgb_pixels[pixel_start_index + 0]
+            combined_rgba_pixels[pixel_start_index + 1] = rgb_pixels[pixel_start_index + 1]
+            combined_rgba_pixels[pixel_start_index + 2] = rgb_pixels[pixel_start_index + 2]
+            combined_rgba_pixels[pixel_start_index + 3] = alpha_pixels[pixel_start_index + 0]
+
+        cls._configure_image_for_png_output(target_image)
+        cls._write_pixels_to_image(target_image, combined_rgba_pixels)
+
+    @classmethod
+    def debug_grayscale_range(cls, image, label="Image"):
+        if image is None:
+            print(f"{label}: image is None")
+            return
+
+        image_pixels = list(image.pixels)
+        grayscale_values = image_pixels[0::4]
+
+        if not grayscale_values:
+            print(f"{label}: no pixels found")
+            return
+
+        print(
+            f"{label}: value min={min(grayscale_values):.6f}, "
+            f"max={max(grayscale_values):.6f}"
+        )
