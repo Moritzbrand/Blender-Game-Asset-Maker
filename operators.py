@@ -1,7 +1,15 @@
 # operators.py
 
-import bpy 
-from .scripts import *
+import math
+import bpy
+
+from .scripts.baking_utils import BakingUtils
+from .scripts.cycles_utils import CyclesUtils
+from .scripts.export_utils import ExportUtils
+from .scripts.material_utils import MaterialUtils
+from .scripts.mesh_utils import MeshUtils
+from .scripts.object_utils import ObjectUtils
+
 
 class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
     bl_idname = "gameready.create_game_asset"
@@ -14,66 +22,73 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
         for obj in context.selected_objects:
             if obj.type != 'MESH':
                 return False
-        return context.active_object is not None and context.mode == 'OBJECT' and context.active_object.type == 'MESH'
+        return (
+            context.active_object is not None
+            and context.mode == 'OBJECT'
+            and context.active_object.type == 'MESH'
+        )
 
     def execute(self, context):
         scene = context.scene
         obj = context.active_object
         selected_objects = list(context.selected_objects)
 
+        visibility_state = {}
+
         # -------------------------
         # High-poly bake source
         # -------------------------
-        temporary_objects = duplicate_selected(context)
+        temporary_objects = ObjectUtils.duplicate_selected(context)
 
         if scene.gameready_apply_rot_scale:
-            apply_transform_to_selected(context)
+            ObjectUtils.apply_transform_to_selected(context)
 
-        apply_modifiers_to_selected(context)
-        temporary_obj = join_objects(context, temporary_objects)
+        MeshUtils.apply_modifiers_to_selected(context)
+        temporary_obj = MeshUtils.join_objects(context, temporary_objects)
         temporary_obj.name = f"{obj.name}_temp"
 
         # -------------------------
         # Low-poly game asset inputs
         # -------------------------
-        select_objects(context, selected_objects)
-        new_objects = duplicate_selected(context)
+        ObjectUtils.select_objects(context, selected_objects)
+        new_objects = ObjectUtils.duplicate_selected(context)
 
         if scene.gameready_unsubdivide:
-            add_unsubdivide_to_objects(
+            MeshUtils.add_unsubdivide_to_objects(
                 new_objects,
                 scene.gameready_unsubdivide_iterations * 2,
             )
 
         if scene.gameready_apply_rot_scale:
-            apply_transform_to_selected(context)
+            ObjectUtils.apply_transform_to_selected(context)
 
-        apply_modifiers_to_selected(context)
+        MeshUtils.apply_modifiers_to_selected(context)
 
-        game_asset = union(context, new_objects)
+        game_asset = MeshUtils.union(context, new_objects)
         game_asset.name = f"{obj.name}_game"
-        
-        
 
         if scene.gameready_merge_by_distance:
             merge_distance = scene.gameready_merge_distance
-            merge_by_distance(context, game_asset, merge_distance)
+            MeshUtils.merge_by_distance(context, game_asset, merge_distance)
 
         if scene.gameready_collapse:
-            decimate_collapse(game_asset,scene.gameready_collapse_ratio)
+            MeshUtils.decimate_collapse(game_asset, scene.gameready_collapse_ratio)
 
         if scene.gameready_remove_planar_vertices:
             angle_limit = scene.gameready_planar_angle_limit
-            decimate_planar(game_asset, angle_limit)
+            MeshUtils.decimate_planar(game_asset, angle_limit)
 
         if scene.gameready_triangulate:
-            triangulate_object(game_asset)
+            MeshUtils.triangulate_object(game_asset)
 
-        remove_custom_normals(game_asset)
+        MeshUtils.remove_custom_normals(game_asset)
         bpy.context.view_layer.objects.active = game_asset
         game_asset.select_set(True)
+
         if scene.gameready_shade_auto_smooth:
-            bpy.ops.object.shade_auto_smooth(angle=math.radians(scene.gameready_auto_smooth_angle))
+            bpy.ops.object.shade_auto_smooth(
+                angle=math.radians(scene.gameready_auto_smooth_angle)
+            )
         else:
             bpy.ops.object.shade_flat()
 
@@ -83,26 +98,26 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
             bpy.ops.uv.smart_project(island_margin=0.03)
             bpy.ops.object.mode_set(mode='OBJECT')
 
-        
         if scene.gameready_bake_textures:
-            CyclesUtils.configure_cycles(context.scene, samples=scene.gameready_sample_count)
+            CyclesUtils.configure_cycles(
+                context.scene,
+                samples=scene.gameready_sample_count,
+            )
             _, created_images = MaterialUtils.setup_bake_material(game_asset, scene)
 
-            rendered_objects = get_all_rendered_objects(context)
+            rendered_objects = BakingUtils.get_all_rendered_objects(context)
             objects_to_hide = [
-                obj for obj in rendered_objects
-                if obj not in {temporary_obj, game_asset}
+                rendered_obj for rendered_obj in rendered_objects
+                if rendered_obj not in {temporary_obj, game_asset}
             ]
-            visibility_state = store_render_visibility(objects_to_hide)
-            hide_from_render(objects_to_hide)
-
+            visibility_state = BakingUtils.store_render_visibility(objects_to_hide)
+            BakingUtils.hide_from_render(objects_to_hide)
 
             texture_size = int(scene.gameready_texture_size)
             bake_margin = texture_size // 8
 
-
             if scene.gameready_bake_normal and "normal" in created_images:
-                MaterialUtils.bake_normal_selected_to_active(
+                BakingUtils.bake_normal_selected_to_active(
                     context=context,
                     source_obj=temporary_obj,
                     target_obj=game_asset,
@@ -112,10 +127,10 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                 )
 
                 if scene.gameready_flip_y_normal:
-                    MaterialUtils.flip_normal_map_y(created_images["normal"])
+                    BakingUtils.flip_normal_map_y(created_images["normal"])
 
             if scene.gameready_bake_ao and "ao" in created_images:
-                MaterialUtils.bake_ao_selected_to_active(
+                BakingUtils.bake_ao_selected_to_active(
                     context=context,
                     source_obj=temporary_obj,
                     target_obj=game_asset,
@@ -139,9 +154,11 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                     and "base_color_rgb_tmp" in created_images
                     and "base_color_alpha_tmp" in created_images
                 ):
-                    # 1) Bake RGB
-                    MaterialUtils.prepare_object_materials_for_emit_bake(temporary_obj, "BASE_COLOR")
-                    MaterialUtils.bake_emit_selected_to_active(
+                    BakingUtils.prepare_object_materials_for_emit_bake(
+                        temporary_obj,
+                        "BASE_COLOR",
+                    )
+                    BakingUtils.bake_emit_selected_to_active(
                         context=context,
                         source_obj=temporary_obj,
                         target_obj=game_asset,
@@ -150,9 +167,11 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                         margin=bake_margin,
                     )
 
-                    # 2) Bake Alpha
-                    MaterialUtils.prepare_object_materials_for_emit_bake(temporary_obj, "ALPHA")
-                    MaterialUtils.bake_emit_selected_to_active(
+                    BakingUtils.prepare_object_materials_for_emit_bake(
+                        temporary_obj,
+                        "ALPHA",
+                    )
+                    BakingUtils.bake_emit_selected_to_active(
                         context=context,
                         source_obj=temporary_obj,
                         target_obj=game_asset,
@@ -161,19 +180,25 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                         margin=bake_margin,
                     )
 
-                    # 3) Combine RGB + Alpha into final RGBA texture
-                    MaterialUtils.debug_grayscale_range(created_images["base_color_alpha_tmp"], "Alpha TMP")
-                    MaterialUtils.combine_rgb_and_alpha_images(
+                    BakingUtils.debug_grayscale_range(
+                        created_images["base_color_alpha_tmp"],
+                        "Alpha TMP",
+                    )
+                    BakingUtils.combine_rgb_and_alpha_images(
                         created_images["base_color_rgb_tmp"],
                         created_images["base_color_alpha_tmp"],
                         created_images["base_color"],
                     )
-                    MaterialUtils.debug_grayscale_range(created_images["base_color"], "Final BaseColor")
-
+                    BakingUtils.debug_grayscale_range(
+                        created_images["base_color"],
+                        "Final BaseColor",
+                    )
                 else:
-                    # No alpha requested -> bake color directly into final texture
-                    MaterialUtils.prepare_object_materials_for_emit_bake(temporary_obj, "BASE_COLOR")
-                    MaterialUtils.bake_emit_selected_to_active(
+                    BakingUtils.prepare_object_materials_for_emit_bake(
+                        temporary_obj,
+                        "BASE_COLOR",
+                    )
+                    BakingUtils.bake_emit_selected_to_active(
                         context=context,
                         source_obj=temporary_obj,
                         target_obj=game_asset,
@@ -183,8 +208,11 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                     )
 
             if scene.gameready_bake_roughness and "roughness" in created_images:
-                MaterialUtils.prepare_object_materials_for_emit_bake(temporary_obj, "ROUGHNESS")
-                MaterialUtils.bake_emit_selected_to_active(
+                BakingUtils.prepare_object_materials_for_emit_bake(
+                    temporary_obj,
+                    "ROUGHNESS",
+                )
+                BakingUtils.bake_emit_selected_to_active(
                     context=context,
                     source_obj=temporary_obj,
                     target_obj=game_asset,
@@ -194,8 +222,11 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                 )
 
             if scene.gameready_bake_metallic and "metallic" in created_images:
-                MaterialUtils.prepare_object_materials_for_emit_bake(temporary_obj, "METALLIC")
-                MaterialUtils.bake_emit_selected_to_active(
+                BakingUtils.prepare_object_materials_for_emit_bake(
+                    temporary_obj,
+                    "METALLIC",
+                )
+                BakingUtils.bake_emit_selected_to_active(
                     context=context,
                     source_obj=temporary_obj,
                     target_obj=game_asset,
@@ -203,7 +234,7 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                     extrusion=scene.gameready_cage_extrusion,
                     margin=bake_margin,
                 )
-            
+
             if (
                 scene.gameready_pack_as_orm
                 and "ao" in created_images
@@ -211,7 +242,7 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                 and "metallic" in created_images
                 and "orm" in created_images
             ):
-                MaterialUtils.combine_orm_images(
+                BakingUtils.combine_orm_images(
                     created_images["ao"],
                     created_images["roughness"],
                     created_images["metallic"],
@@ -219,8 +250,11 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                 )
 
             if scene.gameready_bake_emission and "emission" in created_images:
-                MaterialUtils.prepare_object_materials_for_emit_bake(temporary_obj, "EMISSION")
-                MaterialUtils.bake_emit_selected_to_active(
+                BakingUtils.prepare_object_materials_for_emit_bake(
+                    temporary_obj,
+                    "EMISSION",
+                )
+                BakingUtils.bake_emit_selected_to_active(
                     context=context,
                     source_obj=temporary_obj,
                     target_obj=game_asset,
@@ -229,21 +263,17 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                     margin=bake_margin,
                 )
 
-        
-        
-        restore_render_visibility(visibility_state)
-        # delete temporary object
+        BakingUtils.restore_render_visibility(visibility_state)
+
         bpy.data.objects.remove(temporary_obj, do_unlink=True)
 
         cleanup_stats = MaterialUtils.cleanup_unused_textures_and_materials(game_asset)
-
 
         exported_fbx_paths = []
 
         if scene.gameready_export_fbx:
             lod_count = scene.gameready_lod_count if scene.gameready_generate_lods else 0
-
-            exported_fbx_paths = export_object_and_lods_as_fbx(
+            exported_fbx_paths = ExportUtils.export_object_and_lods_as_fbx(
                 context=context,
                 obj=game_asset,
                 output_dir=scene.gameready_output_dir,
