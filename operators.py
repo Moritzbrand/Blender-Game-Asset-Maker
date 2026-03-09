@@ -36,9 +36,6 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
 
         visibility_state = {}
 
-        # -------------------------
-        # High-poly bake source
-        # -------------------------
         temporary_objects = ObjectUtils.duplicate_selected(context)
 
         if scene.gameready_apply_rot_scale:
@@ -48,9 +45,6 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
         temporary_obj = MeshUtils.join_objects(context, temporary_objects)
         temporary_obj.name = f"{obj.name}_temp"
 
-        # -------------------------
-        # Low-poly game asset inputs
-        # -------------------------
         ObjectUtils.select_objects(context, selected_objects)
         new_objects = ObjectUtils.duplicate_selected(context)
 
@@ -270,15 +264,18 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
 
         cleanup_stats = MaterialUtils.cleanup_unused_textures_and_materials(game_asset)
 
-        exported_fbx_paths = []
+        exported_file_paths = []
 
-        if scene.gameready_export_fbx:
+        if scene.gameready_export_files:
             lod_count = scene.gameready_lod_count if scene.gameready_generate_lods else 0
-            exported_fbx_paths = ExportUtils.export_object_and_lods_as_fbx(
+            exported_file_paths = ExportUtils.export_object_and_lods(
                 context=context,
                 obj=game_asset,
                 output_dir=scene.gameready_output_dir,
                 lod_count=lod_count,
+                export_format_identifier=scene.gameready_export_format,
+                preset_identifier=scene.gameready_export_preset,
+                material_export_strategy_identifier=scene.gameready_material_export_strategy,
             )
 
         message = (
@@ -288,8 +285,8 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
             f"unused materials: {cleanup_stats['removed_materials']}"
         )
 
-        if exported_fbx_paths:
-            message += f" | Exported FBXs: {', '.join(exported_fbx_paths)}"
+        if exported_file_paths:
+            message += f" | Exported Files: {', '.join(exported_file_paths)}"
 
         self.report({'INFO'}, message)
         return {'FINISHED'}

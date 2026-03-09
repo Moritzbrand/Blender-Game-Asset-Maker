@@ -1,5 +1,3 @@
-# panel.py
-
 import bpy
 
 
@@ -30,13 +28,20 @@ class GAMEREADY_PT_settings_panel(bpy.types.Panel):
         layout = self.layout
         scene = context.scene
 
-        # General Settings
         general_box = layout.box()
         general_box.label(text="General", icon='SETTINGS')
-        general_box.prop(scene, "gameready_export_fbx")
         general_box.prop(scene, "gameready_apply_rot_scale")
 
-        # Material/Texture Settings
+        export_box = layout.box()
+        export_box.label(text="Export", icon='EXPORT')
+        export_box.prop(scene, "gameready_export_files")
+        export_sub = export_box.column()
+        export_sub.enabled = scene.gameready_export_files
+        export_sub.prop(scene, "gameready_output_dir")
+        export_sub.prop(scene, "gameready_export_format")
+        export_sub.prop(scene, "gameready_export_preset")
+        export_sub.prop(scene, "gameready_material_export_strategy")
+
         material_box = layout.box()
         material_box.label(text="Material/Texture", icon='MATERIAL')
         material_box.prop(scene, "gameready_uv_unwrap")
@@ -61,12 +66,15 @@ class GAMEREADY_PT_settings_panel(bpy.types.Panel):
         sub.prop(scene, "gameready_bake_roughness")
         sub.prop(scene, "gameready_bake_metallic")
         suborm = sub.column()
-        suborm.enabled = scene.gameready_bake_roughness and scene.gameready_bake_metallic and scene.gameready_bake_ao
+        suborm.enabled = (
+            scene.gameready_bake_roughness
+            and scene.gameready_bake_metallic
+            and scene.gameready_bake_ao
+        )
         suborm.prop(scene, "gameready_pack_as_orm")
         sub.prop(scene, "gameready_sample_count")
         sub.prop(scene, "gameready_cage_extrusion")
 
-        # Mesh Settings
         mesh_box = layout.box()
         mesh_box.label(text="Mesh", icon='MESH_DATA')
         mesh_box.prop(scene, "gameready_unsubdivide")
@@ -87,13 +95,11 @@ class GAMEREADY_PT_settings_panel(bpy.types.Panel):
         sub.prop(scene, "gameready_planar_angle_limit")
         mesh_box.prop(scene, "gameready_triangulate")
 
-        # LOD Settings
-        
         lod_box = mesh_box.box()
         sub_lod = lod_box.column()
-        sub_lod.enabled = scene.gameready_export_fbx 
+        sub_lod.enabled = scene.gameready_export_files
         sub_lod.label(text="LOD", icon='MOD_DECIM')
         sub_lod.prop(scene, "gameready_generate_lods")
         sub = sub_lod.column()
-        sub.enabled = scene.gameready_generate_lods and scene.gameready_export_fbx
+        sub.enabled = scene.gameready_generate_lods and scene.gameready_export_files
         sub.prop(scene, "gameready_lod_count")

@@ -1,0 +1,56 @@
+{
+  "FBX": [
+    {
+      "id": "ue_geometry_only",
+      "label": "Unreal Engine Geometry Only",
+      "description": "Selection-based FBX export with transform settings suited to engine import",
+      "settings": {
+        "axis_forward": "-Y",
+        "axis_up": "Z",
+        "global_scale": 1.0,
+        "apply_unit_scale": true,
+        "use_space_transform": true,
+        "bake_space_transform": false,
+        "use_mesh_modifiers": true,
+        "use_mesh_modifiers_render": true,
+        "path_mode": "AUTO"
+      }
+    },
+    {
+      "id": "default",
+      "label": "Default",
+      "description": "",
+      "settings": {
+        "export_format": "FBX"
+      }
+    }
+  ],
+  "GLB": [
+    {
+      "id": "default",
+      "label": "Default",
+      "description": "Single-file glTF binary export",
+      "settings": {
+        "export_format": "GLB"
+      }
+    }
+  ],
+  "GLTF": [
+    {
+      "id": "default",
+      "label": "Default",
+      "description": "Separate glTF export with external textures",
+      "settings": {
+        "export_format": "GLTF_SEPARATE"
+      }
+    }
+  ],
+  "OBJ": [
+    {
+      "id": "default",
+      "label": "Default",
+      "description": "Selection-only OBJ export",
+      "settings": {}
+    }
+  ]
+}

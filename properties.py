@@ -1,6 +1,45 @@
-# properties.py
-
 import bpy
+
+from .scripts.export_utils import (
+    ExportPresetCatalog,
+    ExportStrategyRegistry,
+    MaterialExportStrategyRegistry,
+)
+
+
+_EXPORT_FORMAT_ENUM_CACHE = []
+_EXPORT_PRESET_ENUM_CACHE = []
+
+
+def get_export_format_enum_items(self, context):
+    global _EXPORT_FORMAT_ENUM_CACHE
+    _EXPORT_FORMAT_ENUM_CACHE = ExportStrategyRegistry.build_format_enum_items()
+    return _EXPORT_FORMAT_ENUM_CACHE
+
+
+def get_export_preset_enum_items(self, context):
+    global _EXPORT_PRESET_ENUM_CACHE
+
+    export_format_identifier = "FBX"
+    if context is not None and context.scene is not None:
+        export_format_identifier = getattr(context.scene, "gameready_export_format", "FBX")
+
+    _EXPORT_PRESET_ENUM_CACHE = ExportPresetCatalog.build_preset_enum_items(
+        export_format_identifier
+    )
+    return _EXPORT_PRESET_ENUM_CACHE
+
+
+def on_export_format_changed(self, context):
+    preset_items = get_export_preset_enum_items(self, context)
+    valid_preset_identifiers = {item[0] for item in preset_items}
+
+    current_preset_identifier = getattr(self, "gameready_export_preset", "")
+    if current_preset_identifier in valid_preset_identifiers:
+        return
+
+    if preset_items:
+        self.gameready_export_preset = preset_items[0][0]
 
 
 class Property:
@@ -35,21 +74,29 @@ class BoolProperty(Property):
 
 
 class EnumProperty(Property):
-    def __init__(self, attr_name: str, name: str, description: str, items, default=None):
+    def __init__(self, attr_name: str, name: str, description: str, items, default=None, update=None):
         super().__init__(attr_name, name, description)
         self.items = items
         self.default = default
+        self.update = update
 
     def register(self):
+        enum_kwargs = {
+            "name": self.name,
+            "description": self.description,
+            "items": self.items,
+        }
+
+        if self.default is not None and not callable(self.items):
+            enum_kwargs["default"] = self.default
+
+        if self.update is not None:
+            enum_kwargs["update"] = self.update
+
         setattr(
             bpy.types.Scene,
             self.attr_name,
-            bpy.props.EnumProperty(
-                name=self.name,
-                description=self.description,
-                items=self.items,
-                default=self.default,
-            ),
+            bpy.props.EnumProperty(**enum_kwargs),
         )
 
 
@@ -73,6 +120,7 @@ class IntProperty(Property):
             ),
         )
 
+
 class FloatProperty(Property):
     def __init__(self, attr_name: str, name: str, description: str, default=0.0, min=0.0, max=1.0):
         super().__init__(attr_name, name, description)
@@ -92,6 +140,7 @@ class FloatProperty(Property):
                 max=self.max,
             ),
         )
+
 
 class PathStringProperty(Property):
     def __init__(self, attr_name: str, name: str, description: str, default="", subtype='NONE'):
@@ -122,10 +171,30 @@ PROPERTIES = [
         subtype='DIR_PATH',
     ),
     BoolProperty(
-        "gameready_export_fbx",
-        "Export FBX",
-        "Export the new game asset as an FBX file (this is a common format for game engines)",
+        "gameready_export_files",
+        "Export",
+        "Export the new game asset after processing",
         True,
+    ),
+    EnumProperty(
+        "gameready_export_format",
+        "Export Format",
+        "Choose which file format the generated asset should use",
+        items=get_export_format_enum_items,
+        update=on_export_format_changed,
+    ),
+    EnumProperty(
+        "gameready_export_preset",
+        "Export Preset",
+        "Choose a Blender user preset or an addon preset for the selected export format",
+        items=get_export_preset_enum_items,
+    ),
+    EnumProperty(
+        "gameready_material_export_strategy",
+        "Material Export",
+        "Choose whether materials should be stripped or kept during export",
+        items=MaterialExportStrategyRegistry.build_enum_items(),
+        default="STRIP_MATERIALS",
     ),
     BoolProperty(
         "gameready_uv_unwrap",
@@ -156,7 +225,7 @@ PROPERTIES = [
     BoolProperty(
         "gameready_unsubdivide",
         "Unsubdivide",
-        "Unsubdivide the mesh of the new game asset (this can help reduce the polygon count for game engines)",
+        "Unsubdivide the mesh of the new game asset",
         False,
     ),
     IntProperty(
@@ -170,21 +239,21 @@ PROPERTIES = [
     BoolProperty(
         "gameready_collapse",
         "Collapse",
-        "Collapse the mesh of the new game asset (this can help reduce the polygon count for game engines)",
+        "Collapse the mesh of the new game asset",
         True,
     ),
     FloatProperty(
         "gameready_collapse_ratio",
         "Collapse Ratio",
-        "Ratio of vertices to collapse when collapsing the mesh (1.0 = no collapse, 0.0 = collapse all vertices)",
-        default=0.9,    
+        "Ratio of vertices to collapse when collapsing the mesh",
+        default=0.9,
         min=0.0,
         max=1.0,
     ),
     BoolProperty(
         "gameready_remove_planar_vertices",
         "Remove Planar Vertices",
-        "Remove vertices that are part of planar faces to optimize the mesh for game engines (this can cause issues with certain types of geometry, so only enable if needed)",
+        "Remove vertices that are part of planar faces to optimize the mesh",
         True,
     ),
     IntProperty(
@@ -198,7 +267,7 @@ PROPERTIES = [
     BoolProperty(
         "gameready_triangulate",
         "Triangulate",
-        "Triangulate the mesh of the new game asset (some game engines require triangulated meshes)",
+        "Triangulate the mesh of the new game asset",
         True,
     ),
     BoolProperty(
@@ -243,10 +312,9 @@ PROPERTIES = [
     BoolProperty(
         "gameready_bake_alpha",
         "Alpha",
-        "Add an alpha channel to the baked base color texture if any of the original materials have transparency (this will increase the file size of the baked texture, so only enable if needed)",
+        "Add an alpha channel to the baked base color texture if needed",
         False,
     ),
-    
     BoolProperty(
         "gameready_bake_emission",
         "Emission",
@@ -262,10 +330,9 @@ PROPERTIES = [
     BoolProperty(
         "gameready_flip_y_normal",
         "Flip Y Normal",
-        "Flip the Y channel of the baked normal map (some game engines use a different normal map convention, so enable this if your normal maps look incorrect in your game engine)",
+        "Flip the Y channel of the baked normal map",
         True,
     ),
-
     BoolProperty(
         "gameready_bake_ao",
         "Ambient Occlusion",
@@ -287,28 +354,25 @@ PROPERTIES = [
     BoolProperty(
         "gameready_pack_as_orm",
         "Pack as ORM",
-        "Pack roughness, metallic, and ambient occlusion into a single texture (ORM) for use in game engines that support it",
+        "Pack roughness, metallic, and ambient occlusion into a single texture",
         True,
     ),
-
     IntProperty(
         "gameready_sample_count",
         "Sample Count",
-        "Number of samples to use when baking textures (higher values produce better quality but take longer)",
+        "Number of samples to use when baking textures",
         default=512,
         min=8,
         max=1024,
     ),
-
     FloatProperty(
         "gameready_cage_extrusion",
         "Cage Extrusion",
-        "Amount of extrusion to apply to the cage when baking (higher values can help prevent baking artifacts but may cause distortion)",
+        "Amount of extrusion to apply to the cage when baking",
         default=0.07,
         min=0.0,
         max=1.0,
     ),
-
     BoolProperty(
         "gameready_shade_auto_smooth",
         "Auto Smooth Shading",
@@ -323,7 +387,6 @@ PROPERTIES = [
         min=0,
         max=180,
     ),
-
 ]
 
 
