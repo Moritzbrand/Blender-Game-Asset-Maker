@@ -43,10 +43,11 @@ def on_export_format_changed(self, context):
 
 
 class Property:
-    def __init__(self, attr_name: str, name: str, description: str):
+    def __init__(self, attr_name: str, name: str, description: str, options=None):
         self.attr_name = attr_name
         self.name = name
         self.description = description
+        self.options = options or set()
 
     def register(self):
         raise NotImplementedError("Subclasses must implement register()")
@@ -57,8 +58,8 @@ class Property:
 
 
 class BoolProperty(Property):
-    def __init__(self, attr_name: str, name: str, description: str, default=False):
-        super().__init__(attr_name, name, description)
+    def __init__(self, attr_name: str, name: str, description: str, default=False, options=None):
+        super().__init__(attr_name, name, description, options=options)
         self.default = default
 
     def register(self):
@@ -69,13 +70,14 @@ class BoolProperty(Property):
                 name=self.name,
                 description=self.description,
                 default=self.default,
+                options=self.options,
             ),
         )
 
 
 class EnumProperty(Property):
-    def __init__(self, attr_name: str, name: str, description: str, items, default=None, update=None):
-        super().__init__(attr_name, name, description)
+    def __init__(self, attr_name: str, name: str, description: str, items, default=None, update=None, options=None):
+        super().__init__(attr_name, name, description, options=options)
         self.items = items
         self.default = default
         self.update = update
@@ -85,6 +87,7 @@ class EnumProperty(Property):
             "name": self.name,
             "description": self.description,
             "items": self.items,
+            "options": self.options,
         }
 
         if self.default is not None and not callable(self.items):
@@ -101,8 +104,8 @@ class EnumProperty(Property):
 
 
 class IntProperty(Property):
-    def __init__(self, attr_name: str, name: str, description: str, default=0, min=0, max=100):
-        super().__init__(attr_name, name, description)
+    def __init__(self, attr_name: str, name: str, description: str, default=0, min=0, max=100, options=None):
+        super().__init__(attr_name, name, description, options=options)
         self.default = default
         self.min = min
         self.max = max
@@ -117,16 +120,18 @@ class IntProperty(Property):
                 default=self.default,
                 min=self.min,
                 max=self.max,
+                options=self.options,
             ),
         )
 
 
 class FloatProperty(Property):
-    def __init__(self, attr_name: str, name: str, description: str, default=0.0, min=0.0, max=1.0):
-        super().__init__(attr_name, name, description)
+    def __init__(self, attr_name: str, name: str, description: str, default=0.0, min=0.0, max=1.0, subtype='NONE', options=None):
+        super().__init__(attr_name, name, description, options=options)
         self.default = default
         self.min = min
         self.max = max
+        self.subtype = subtype
 
     def register(self):
         setattr(
@@ -138,15 +143,38 @@ class FloatProperty(Property):
                 default=self.default,
                 min=self.min,
                 max=self.max,
+                subtype=self.subtype,
+                options=self.options,
             ),
         )
 
 
 class PathStringProperty(Property):
-    def __init__(self, attr_name: str, name: str, description: str, default="", subtype='NONE'):
-        super().__init__(attr_name, name, description)
+    def __init__(self, attr_name: str, name: str, description: str, default="", subtype='NONE', options=None):
+        super().__init__(attr_name, name, description, options=options)
         self.default = default
         self.subtype = subtype
+
+    def register(self):
+        property_options = set(self.options)
+        property_options.add('PATH_SUPPORTS_BLEND_RELATIVE')
+        setattr(
+            bpy.types.Scene,
+            self.attr_name,
+            bpy.props.StringProperty(
+                name=self.name,
+                description=self.description,
+                default=self.default,
+                subtype=self.subtype,
+                options=property_options,
+            ),
+        )
+
+
+class StringProperty(Property):
+    def __init__(self, attr_name: str, name: str, description: str, default="", options=None):
+        super().__init__(attr_name, name, description, options=options)
+        self.default = default
 
     def register(self):
         setattr(
@@ -156,8 +184,25 @@ class PathStringProperty(Property):
                 name=self.name,
                 description=self.description,
                 default=self.default,
-                subtype=self.subtype,
-                options={'PATH_SUPPORTS_BLEND_RELATIVE'},
+                options=self.options,
+            ),
+        )
+
+
+class PointerProperty(Property):
+    def __init__(self, attr_name: str, name: str, description: str, pointer_type, options=None):
+        super().__init__(attr_name, name, description, options=options)
+        self.pointer_type = pointer_type
+
+    def register(self):
+        setattr(
+            bpy.types.Scene,
+            self.attr_name,
+            bpy.props.PointerProperty(
+                name=self.name,
+                description=self.description,
+                type=self.pointer_type,
+                options=self.options,
             ),
         )
 
@@ -386,6 +431,51 @@ PROPERTIES = [
         default=60,
         min=0,
         max=180,
+    ),
+    BoolProperty(
+        "gameready_job_running",
+        "Job Running",
+        "True while the game asset build job is running",
+        default=False,
+        options={'SKIP_SAVE'},
+    ),
+    FloatProperty(
+        "gameready_job_progress",
+        "Job Progress",
+        "Progress of the running game asset build job",
+        default=0.0,
+        min=0.0,
+        max=100.0,
+        subtype='PERCENTAGE',
+        options={'SKIP_SAVE'},
+    ),
+    StringProperty(
+        "gameready_job_current_step_label",
+        "Current Step",
+        "Current game asset build step",
+        default="",
+        options={'SKIP_SAVE'},
+    ),
+    StringProperty(
+        "gameready_job_status_text",
+        "Job Status",
+        "Additional job status text",
+        default="",
+        options={'SKIP_SAVE'},
+    ),
+    StringProperty(
+        "gameready_job_result_text",
+        "Job Result",
+        "Final result text of the last build job",
+        default="",
+        options={'SKIP_SAVE'},
+    ),
+    PointerProperty(
+        "gameready_job_preview_image",
+        "Preview Image",
+        "Last baked texture preview image",
+        pointer_type=bpy.types.Image,
+        options={'SKIP_SAVE'},
     ),
 ]
 

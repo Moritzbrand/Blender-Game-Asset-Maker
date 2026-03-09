@@ -1,5 +1,3 @@
-# __init__.py
-
 bl_info = {
     "name": "Game Ready Addon",
     "author": "Moritz Brand",
@@ -20,14 +18,14 @@ from . import properties
 classes = (
     GAMEREADY_OT_create_game_asset,
     GAMEREADY_PT_main_panel,
-    GAMEREADY_PT_settings_panel
+    GAMEREADY_PT_settings_panel,
 )
+
 
 def register():
     properties.register()
     for cls in classes:
         bpy.utils.register_class(cls)
-    
     print("Game Ready Addon enabled")
 
 

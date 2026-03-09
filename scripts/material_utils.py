@@ -170,6 +170,169 @@ class MaterialUtils:
         return node
 
     @staticmethod
+    def _is_normal_y_display_fix_node(node):
+        if node is None:
+            return False
+        return str(getattr(node, "name", "")).startswith("GR_NormalYDisplayFix_")
+
+    @staticmethod
+    def _remove_links_from_socket(links, socket):
+        if socket is None:
+            return
+        for link in list(socket.links):
+            links.remove(link)
+
+    @staticmethod
+    def _find_normal_map_node_for_texture_node(normal_texture_node):
+        if normal_texture_node is None:
+            return None
+
+        color_output = normal_texture_node.outputs.get("Color")
+        if color_output is None:
+            return None
+
+        nodes_to_visit = [link.to_node for link in color_output.links]
+        visited_node_pointers = set()
+
+        while nodes_to_visit:
+            current_node = nodes_to_visit.pop(0)
+            current_node_pointer = current_node.as_pointer()
+
+            if current_node_pointer in visited_node_pointers:
+                continue
+            visited_node_pointers.add(current_node_pointer)
+
+            if current_node.bl_idname == "ShaderNodeNormalMap":
+                return current_node
+
+            for output_socket in current_node.outputs:
+                for output_link in output_socket.links:
+                    nodes_to_visit.append(output_link.to_node)
+
+        return None
+
+    @staticmethod
+    def _remove_existing_normal_y_display_fix_nodes(nodes):
+        for node in list(nodes):
+            if MaterialUtils._is_normal_y_display_fix_node(node):
+                nodes.remove(node)
+
+    @staticmethod
+    def _connect_normal_texture_directly_to_normal_map(links, normal_texture_node, normal_map_node):
+        texture_color_output = normal_texture_node.outputs.get("Color")
+        normal_map_color_input = normal_map_node.inputs.get("Color")
+
+        if texture_color_output is None or normal_map_color_input is None:
+            return
+
+        MaterialUtils._remove_links_from_socket(links, normal_map_color_input)
+        links.new(texture_color_output, normal_map_color_input)
+
+    @staticmethod
+    def _insert_normal_y_display_fix_between_texture_and_normal_map(
+        nodes,
+        links,
+        normal_texture_node,
+        normal_map_node,
+    ):
+        texture_color_output = normal_texture_node.outputs.get("Color")
+        normal_map_color_input = normal_map_node.inputs.get("Color")
+
+        if texture_color_output is None or normal_map_color_input is None:
+            return
+
+        MaterialUtils._remove_links_from_socket(links, normal_map_color_input)
+        MaterialUtils._remove_existing_normal_y_display_fix_nodes(nodes)
+
+        node_y = int(getattr(normal_texture_node, "location", (0, 0))[1])
+
+        separate_color_node = nodes.new("ShaderNodeSeparateColor")
+        separate_color_node.name = "GR_NormalYDisplayFix_Separate"
+        separate_color_node.label = "GR Normal Y Display Fix Separate"
+        separate_color_node.location = (-650, node_y)
+
+        invert_green_node = nodes.new("ShaderNodeMath")
+        invert_green_node.name = "GR_NormalYDisplayFix_InvertGreen"
+        invert_green_node.label = "GR Normal Y Display Fix Invert Green"
+        invert_green_node.operation = 'SUBTRACT'
+        invert_green_node.inputs[0].default_value = 1.0
+        invert_green_node.location = (-450, node_y - 140)
+
+        combine_color_node = nodes.new("ShaderNodeCombineColor")
+        combine_color_node.name = "GR_NormalYDisplayFix_Combine"
+        combine_color_node.label = "GR Normal Y Display Fix Combine"
+        combine_color_node.location = (-250, node_y)
+
+        try:
+            separate_color_node.mode = 'RGB'
+        except Exception:
+            pass
+
+        try:
+            combine_color_node.mode = 'RGB'
+        except Exception:
+            pass
+
+        links.new(texture_color_output, separate_color_node.inputs["Color"])
+        links.new(separate_color_node.outputs["Red"], combine_color_node.inputs["Red"])
+        links.new(separate_color_node.outputs["Blue"], combine_color_node.inputs["Blue"])
+        links.new(separate_color_node.outputs["Green"], invert_green_node.inputs[1])
+        links.new(invert_green_node.outputs["Value"], combine_color_node.inputs["Green"])
+        links.new(combine_color_node.outputs["Color"], normal_map_color_input)
+
+    @staticmethod
+    def apply_normal_y_display_fix_to_material(material):
+        if material is None or not material.use_nodes or material.node_tree is None:
+            return False
+
+        nodes = material.node_tree.nodes
+        links = material.node_tree.links
+        has_applied_fix = False
+
+        for node in list(nodes):
+            if node.bl_idname != "ShaderNodeTexImage":
+                continue
+            if node.name != "Normal" and node.label != "Normal":
+                continue
+
+            normal_map_node = MaterialUtils._find_normal_map_node_for_texture_node(node)
+            if normal_map_node is None:
+                continue
+
+            MaterialUtils._insert_normal_y_display_fix_between_texture_and_normal_map(
+                nodes=nodes,
+                links=links,
+                normal_texture_node=node,
+                normal_map_node=normal_map_node,
+            )
+            has_applied_fix = True
+
+        return has_applied_fix
+
+    @staticmethod
+    def apply_normal_y_display_fix_to_object(obj):
+        if obj is None or obj.type != 'MESH':
+            return 0
+
+        fixed_material_count = 0
+        seen_material_pointers = set()
+
+        for material_slot in obj.material_slots:
+            material = material_slot.material
+            if material is None:
+                continue
+
+            material_pointer = material.as_pointer()
+            if material_pointer in seen_material_pointers:
+                continue
+            seen_material_pointers.add(material_pointer)
+
+            if MaterialUtils.apply_normal_y_display_fix_to_material(material):
+                fixed_material_count += 1
+
+        return fixed_material_count
+
+    @staticmethod
     def setup_bake_material(obj, scene):
         if obj is None or obj.type != 'MESH':
             raise ValueError("Object must be a mesh")

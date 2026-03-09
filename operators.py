@@ -36,6 +36,9 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
 
         visibility_state = {}
 
+        # -------------------------
+        # High-poly bake source
+        # -------------------------
         temporary_objects = ObjectUtils.duplicate_selected(context)
 
         if scene.gameready_apply_rot_scale:
@@ -45,6 +48,9 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
         temporary_obj = MeshUtils.join_objects(context, temporary_objects)
         temporary_obj.name = f"{obj.name}_temp"
 
+        # -------------------------
+        # Low-poly game asset inputs
+        # -------------------------
         ObjectUtils.select_objects(context, selected_objects)
         new_objects = ObjectUtils.duplicate_selected(context)
 
@@ -275,8 +281,10 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                 lod_count=lod_count,
                 export_format_identifier=scene.gameready_export_format,
                 preset_identifier=scene.gameready_export_preset,
-                material_export_strategy_identifier=scene.gameready_material_export_strategy,
             )
+
+        if scene.gameready_flip_y_normal and scene.gameready_bake_normal:
+            MaterialUtils.apply_normal_y_display_fix_to_object(game_asset)
 
         message = (
             f"Game asset created: {obj.name} | "
