@@ -39,7 +39,7 @@ SCENE_PROPERTIES = [
     FloatSceneProperty("gameready_merge_distance", "Merge Distance", "Distance threshold for merging vertices when 'Merge by Distance' is enabled", default=0.0001, min=0.0, max=0.1),
     BoolSceneProperty("gameready_unsubdivide", "Unsubdivide", "Unsubdivide the mesh of the new game asset", False),
     IntSceneProperty("gameready_unsubdivide_iterations", "Unsubdivide Iterations", "Number of iterations to perform when unsubdividing the mesh", default=1, min=1, max=4),
-    BoolSceneProperty("gameready_collapse", "Collapse", "Collapse the mesh of the new game asset", True),
+    BoolSceneProperty("gameready_collapse", "Collapse", "Collapse the mesh of the new game asset", False),
     FloatSceneProperty("gameready_collapse_ratio", "Collapse Ratio", "Ratio of vertices to collapse when collapsing the mesh", default=0.9, min=0.0, max=1.0),
     BoolSceneProperty("gameready_remove_planar_vertices", "Remove Planar Vertices", "Remove vertices that are part of planar faces to optimize the mesh", True),
     IntSceneProperty("gameready_planar_angle_limit", "Planar Angle Limit", "Maximum angle between faces to consider them planar", default=5, min=0, max=30),
