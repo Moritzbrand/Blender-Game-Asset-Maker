@@ -183,6 +183,30 @@ class GameAssetWorkflowServices:
             source_object = self.store.get_object(self.state.game_asset_name)
         MaterialUtils.make_materials_single_user(source_object)
 
+    def resolve_bake_extrusion(self, context):
+        scene = context.scene
+        default_extrusion = float(scene.gameready_cage_extrusion)
+
+        if not scene.gameready_auto_cage_extrusion:
+            self.state.resolved_cage_extrusion = default_extrusion
+            return
+
+        source_object = self.store.get_object(self.state.temporary_object_name) or self.store.get_object(self.state.game_asset_name)
+        target_object = self.store.get_object(self.state.game_asset_name)
+
+        self.state.resolved_cage_extrusion = BakingUtils.calculate_auto_cage_extrusion(
+            context=context,
+            source_object=source_object,
+            target_object=target_object,
+            fallback_extrusion=default_extrusion,
+            maximum_extrusion=1.0,
+        )
+
+    def _resolved_cage_extrusion(self, context):
+        if self.state.resolved_cage_extrusion > 0.0:
+            return self.state.resolved_cage_extrusion
+        return float(context.scene.gameready_cage_extrusion)
+
     def bake_normal(self, context):
         scene = context.scene
         temporary_object = self.store.get_object(self.state.temporary_object_name)
@@ -193,7 +217,7 @@ class GameAssetWorkflowServices:
             source_obj=temporary_object or game_asset,
             target_obj=game_asset,
             target_image=normal_image,
-            extrusion=scene.gameready_cage_extrusion,
+            extrusion=self._resolved_cage_extrusion(context),
             margin=self.state.bake_margin,
         )
         if scene.gameready_flip_y_normal:
@@ -209,7 +233,6 @@ class GameAssetWorkflowServices:
         self._bake_selected_to_active(context, image_key, bake_mode="EMIT")
 
     def _bake_selected_to_active(self, context, image_key: str, bake_mode: str):
-        scene = context.scene
         bake_call = (
             BakingUtils.bake_emit_selected_to_active
             if bake_mode == "EMIT"
@@ -220,7 +243,7 @@ class GameAssetWorkflowServices:
             source_obj=self.store.get_object(self.state.temporary_object_name) or self.store.get_object(self.state.game_asset_name),
             target_obj=self.store.get_object(self.state.game_asset_name),
             target_image=self.store.get_created_image(image_key),
-            extrusion=scene.gameready_cage_extrusion,
+            extrusion=self._resolved_cage_extrusion(context),
             margin=self.state.bake_margin,
         )
 

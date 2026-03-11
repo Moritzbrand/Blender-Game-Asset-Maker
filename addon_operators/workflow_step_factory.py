@@ -25,6 +25,8 @@ class WorkflowStepFactory:
             if self._has_emit_channels(scene):
                 self._add(steps, "Preparing Source Materials", "Making source materials single-user for emit-based bakes.", self.services.make_source_materials_single_user, 1)
 
+            self._add(steps, "Resolving Cage Extrusion", "Calculating the cage extrusion distance used for bake ray casting.", self.services.resolve_bake_extrusion, 1)
+
             if scene.gameready_bake_normal:
                 self._add(steps, "Baking Normal Map", "Normal map bake is running. Watch Blender's status bar for the live bake progress.", self.services.bake_normal, 20, "The normal map bake finished.")
             if scene.gameready_bake_ao:

@@ -122,6 +122,49 @@ class BakingUtils:
                 scene_object.hide_render = hide_from_render
 
     @classmethod
+    def calculate_auto_cage_extrusion(
+        cls,
+        context,
+        source_object,
+        target_object,
+        fallback_extrusion,
+        maximum_extrusion=1.0,
+    ):
+        cls._require_mesh_object(source_object, "source_object")
+        cls._require_mesh_object(target_object, "target_object")
+
+        target_mesh = getattr(target_object, "data", None)
+        target_vertices = list(getattr(target_mesh, "vertices", [])) if target_mesh is not None else []
+        if not target_vertices:
+            return float(fallback_extrusion)
+
+        sample_step = max(1, len(target_vertices) // 256)
+        sampled_vertices = target_vertices[::sample_step]
+
+        source_matrix_world = source_object.matrix_world
+        source_matrix_inverse = source_matrix_world.inverted()
+        target_matrix_world = target_object.matrix_world
+
+        distances = []
+        for vertex in sampled_vertices:
+            target_vertex_world = target_matrix_world @ vertex.co
+            target_vertex_in_source_space = source_matrix_inverse @ target_vertex_world
+            hit, hit_location, _normal, _index = source_object.closest_point_on_mesh(target_vertex_in_source_space)
+            if not hit:
+                continue
+            hit_world = source_matrix_world @ hit_location
+            distances.append((hit_world - target_vertex_world).length)
+
+        if not distances:
+            return float(fallback_extrusion)
+
+        distances.sort()
+        percentile_index = min(len(distances) - 1, int(len(distances) * 0.95))
+        padded_distance = distances[percentile_index] * 1.1
+        minimum_extrusion = 0.0001
+        return min(maximum_extrusion, max(minimum_extrusion, padded_distance))
+
+    @classmethod
     def bake_normal_selected_to_active(
         cls,
         context,
