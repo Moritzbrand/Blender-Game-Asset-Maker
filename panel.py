@@ -2,8 +2,6 @@
 # Example: import panel
 import bpy
 
-from .addon_operators.create_asset_preconditions import CreateAssetPreconditions
-
 
 class GAMEREADY_PT_main_panel(bpy.types.Panel):
     bl_label = "Game Ready Addon"
@@ -19,16 +17,8 @@ class GAMEREADY_PT_main_panel(bpy.types.Panel):
         action_box = layout.box()
         action_box.label(text="Create", icon='MOD_BUILD')
 
-        disable_reasons = CreateAssetPreconditions.reasons(context)
-        if disable_reasons:
-            reason_box = action_box.box()
-            reason_box.alert = True
-            reason_box.label(text="Can't create asset yet:", icon='ERROR')
-            for reason in disable_reasons:
-                reason_box.label(text=reason, icon='DOT')
-
         create_row = action_box.row()
-        create_row.enabled = not disable_reasons
+        create_row.enabled = not window_manager.gameready_progress_running
         create_row.operator("gameready.create_game_asset", icon='DUPLICATE')
 
         if window_manager.gameready_progress_running:
