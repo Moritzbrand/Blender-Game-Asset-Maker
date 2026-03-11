@@ -24,9 +24,9 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        reasons = CreateAssetPreconditions.reasons(context)
-        if reasons:
-            cls.poll_message_set(reasons[0])
+        evaluation = CreateAssetPreconditions.evaluate(context)
+        if evaluation.blocking_issues:
+            cls.poll_message_set(evaluation.blocking_issues[0].message)
             return False
         return True
 
