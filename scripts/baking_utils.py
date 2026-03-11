@@ -133,154 +133,36 @@ class BakingUtils:
         cls._require_mesh_object(source_object, "source_object")
         cls._require_mesh_object(target_object, "target_object")
 
+        target_mesh = getattr(target_object, "data", None)
+        target_vertices = list(getattr(target_mesh, "vertices", [])) if target_mesh is not None else []
+        if not target_vertices:
+            return float(fallback_extrusion)
+
+        sample_step = max(1, len(target_vertices) // 256)
+        sampled_vertices = target_vertices[::sample_step]
+
+        source_matrix_world = source_object.matrix_world
+        source_matrix_inverse = source_matrix_world.inverted()
+        target_matrix_world = target_object.matrix_world
+
+        distances = []
+        for vertex in sampled_vertices:
+            target_vertex_world = target_matrix_world @ vertex.co
+            target_vertex_in_source_space = source_matrix_inverse @ target_vertex_world
+            hit, hit_location, _normal, _index = source_object.closest_point_on_mesh(target_vertex_in_source_space)
+            if not hit:
+                continue
+            hit_world = source_matrix_world @ hit_location
+            distances.append((hit_world - target_vertex_world).length)
+
+        if not distances:
+            return float(fallback_extrusion)
+
+        distances.sort()
+        percentile_index = min(len(distances) - 1, int(len(distances) * 0.95))
+        padded_distance = distances[percentile_index] * 1.1
         minimum_extrusion = 0.0001
-
-        def clamp_extrusion(value):
-            return min(float(maximum_extrusion), max(minimum_extrusion, float(value)))
-
-        fallback_extrusion = clamp_extrusion(fallback_extrusion)
-
-        depsgraph = context.evaluated_depsgraph_get()
-        source_eval = source_object.evaluated_get(depsgraph)
-        target_eval = target_object.evaluated_get(depsgraph)
-
-        target_mesh = target_eval.to_mesh()
-        if target_mesh is None:
-            return fallback_extrusion
-
-        try:
-            if not target_mesh.vertices:
-                return fallback_extrusion
-
-            source_matrix_world = source_eval.matrix_world.copy()
-            source_matrix_inverse = source_matrix_world.inverted()
-            source_world_to_object_3x3 = source_matrix_inverse.to_3x3()
-
-            target_matrix_world = target_eval.matrix_world.copy()
-            target_normal_to_world = target_matrix_world.to_3x3().inverted().transposed()
-
-            search_distance = max(float(maximum_extrusion), float(fallback_extrusion))
-            ray_distance = max(search_distance * 2.0, minimum_extrusion)
-
-            max_vertex_samples = 1024
-            max_edge_samples = 512
-            max_face_samples = 512
-            percentile = 0.99
-            safety_factor = 1.03
-
-            def iter_sample_indices(count, max_samples):
-                if count <= 0:
-                    return
-                if count <= max_samples:
-                    for index in range(count):
-                        yield index
-                    return
-
-                step = float(count - 1) / float(max_samples - 1)
-                yielded = set()
-                for sample_index in range(max_samples):
-                    index = int(round(sample_index * step))
-                    if index >= count:
-                        index = count - 1
-                    if index not in yielded:
-                        yielded.add(index)
-                        yield index
-
-            def add_sample(samples, local_position, local_normal):
-                if local_normal.length_squared == 0.0:
-                    return
-                samples.append((local_position.copy(), local_normal.normalized()))
-
-            samples = []
-
-            for vertex_index in iter_sample_indices(len(target_mesh.vertices), max_vertex_samples):
-                vertex = target_mesh.vertices[vertex_index]
-                add_sample(samples, vertex.co, vertex.normal)
-
-            for edge_index in iter_sample_indices(len(target_mesh.edges), max_edge_samples):
-                edge = target_mesh.edges[edge_index]
-                vertex_a = target_mesh.vertices[edge.vertices[0]]
-                vertex_b = target_mesh.vertices[edge.vertices[1]]
-                midpoint = (vertex_a.co + vertex_b.co) * 0.5
-                averaged_normal = vertex_a.normal + vertex_b.normal
-                if averaged_normal.length_squared == 0.0:
-                    averaged_normal = vertex_a.normal if vertex_a.normal.length_squared != 0.0 else vertex_b.normal
-                add_sample(samples, midpoint, averaged_normal)
-
-            for polygon_index in iter_sample_indices(len(target_mesh.polygons), max_face_samples):
-                polygon = target_mesh.polygons[polygon_index]
-                add_sample(samples, polygon.center, polygon.normal)
-
-            if not samples:
-                return fallback_extrusion
-
-            measured_distances = []
-
-            for local_position, local_normal in samples:
-                world_position = target_matrix_world @ local_position
-
-                world_normal = target_normal_to_world @ local_normal
-                if world_normal.length_squared == 0.0:
-                    continue
-                world_normal.normalize()
-
-                ray_origin_world = world_position + (world_normal * search_distance)
-                ray_direction_world = -world_normal
-
-                ray_origin_source = source_matrix_inverse @ ray_origin_world
-                ray_direction_source = source_world_to_object_3x3 @ ray_direction_world
-                if ray_direction_source.length_squared == 0.0:
-                    continue
-                ray_direction_source.normalize()
-
-                best_distance = None
-
-                hit, hit_location, _hit_normal, _hit_index = source_eval.ray_cast(
-                    ray_origin_source,
-                    ray_direction_source,
-                    distance=ray_distance,
-                )
-
-                if hit:
-                    hit_world = source_matrix_world @ hit_location
-                    projected_distance = (hit_world - world_position).dot(world_normal)
-
-                    if projected_distance > 0.0:
-                        best_distance = projected_distance
-
-                if best_distance is None:
-                    point_in_source_space = source_matrix_inverse @ world_position
-                    found, hit_location, _hit_normal, _hit_index = source_eval.closest_point_on_mesh(
-                        point_in_source_space,
-                        distance=search_distance,
-                    )
-
-                    if found:
-                        hit_world = source_matrix_world @ hit_location
-                        offset_vector = hit_world - world_position
-                        projected_distance = offset_vector.dot(world_normal)
-
-                        if projected_distance > 0.0:
-                            best_distance = projected_distance
-                        else:
-                            best_distance = offset_vector.length
-
-                if best_distance is not None and best_distance > 0.0:
-                    measured_distances.append(best_distance)
-
-            if not measured_distances:
-                return fallback_extrusion
-
-            measured_distances.sort()
-
-            percentile_index = int(round((len(measured_distances) - 1) * percentile))
-            percentile_index = max(0, min(len(measured_distances) - 1, percentile_index))
-
-            extrusion = measured_distances[percentile_index] * safety_factor
-            return clamp_extrusion(extrusion)
-
-        finally:
-            target_eval.to_mesh_clear()
+        return min(maximum_extrusion, max(minimum_extrusion, padded_distance))
 
     @classmethod
     def bake_normal_selected_to_active(
