@@ -11,7 +11,6 @@ from ..scripts.image_utils import ImageUtils
 from ..scripts.material_utils import MaterialUtils
 from ..scripts.mesh_utils import MeshUtils
 from ..scripts.object_utils import ObjectUtils
-from ..scripts.post_processing import PostBakeHoleStitchPass
 from ..scripts.uv_utils import UVUtils
 from .models import WorkflowState
 
@@ -59,7 +58,6 @@ class GameAssetWorkflowServices:
     def __init__(self, state: WorkflowState):
         self.state = state
         self.store = WorkflowContextStore(state)
-        self.post_bake_hole_stitch_pass = PostBakeHoleStitchPass()
 
     def _use_selected_to_active_mode(self, context):
         return bool(context.scene.gameready_bake_selected_to_active)
@@ -268,22 +266,6 @@ class GameAssetWorkflowServices:
             self.store.get_created_image("orm"),
             scene=context.scene,
         )
-
-    def stitch_bake_holes(self, context):
-        if not bool(getattr(context.scene, "gameready_stitch_baking_holes", False)):
-            return
-
-        game_asset = self.store.get_object(self.state.game_asset_name)
-        for image_key in self.state.created_image_names:
-            image = self.store.get_created_image(image_key)
-            if image is None:
-                continue
-
-            self.post_bake_hole_stitch_pass.run(
-                image=image,
-                target_object=game_asset,
-                texture_key=image_key,
-            )
 
     def restore_visibility(self, context):
         BakingUtils.restore_render_visibility(self.state.visibility_state)

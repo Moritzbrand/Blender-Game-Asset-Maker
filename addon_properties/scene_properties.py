@@ -50,7 +50,6 @@ SCENE_PROPERTIES = [
     BoolSceneProperty("gameready_pack_as_orm", "Pack as ORM", "Pack roughness, metallic, and ambient occlusion into a single texture", True),
     IntSceneProperty("gameready_sample_count", "Sample Count", "Number of samples to use when baking textures", default=512, min=8, max=1024),
     BoolSceneProperty("gameready_auto_cage_extrusion", "Auto Cage Extrusion", "Automatically calculate a safe cage extrusion distance for selected-to-active texture baking", True),
-    BoolSceneProperty("gameready_stitch_baking_holes", "Stitch Baking Holes", "Run a post-bake hole mask and stitching pass that fills unbaked pixels inside covered UV regions", False),
     FloatSceneProperty("gameready_cage_extrusion", "Cage Extrusion", "Amount of extrusion to apply to the cage when baking", default=0.07, min=0.0, max=1.0),
     BoolSceneProperty("gameready_shade_auto_smooth", "Auto Smooth Shading", "Enable auto smooth shading on the new game asset", True),
     IntSceneProperty("gameready_auto_smooth_angle", "Auto Smooth Angle", "Angle for auto smooth shading", default=60, min=0, max=180),

@@ -37,9 +37,6 @@ class WorkflowStepFactory:
             if scene.gameready_pack_as_orm and scene.gameready_bake_ao and scene.gameready_bake_roughness and scene.gameready_bake_metallic:
                 self._add(steps, "Packing ORM Texture", "Combining AO, roughness, and metallic into the ORM texture.", self.services.pack_orm, 2)
 
-            if scene.gameready_stitch_baking_holes:
-                self._add(steps, "Stitching Baking Holes", "Detecting unbaked texels inside UV coverage and stitching them from neighboring valid texels.", self.services.stitch_bake_holes, 3)
-
             self._add(steps, "Restoring Scene Visibility", "Making hidden objects visible for rendering again.", self.services.restore_visibility, 1)
 
         self._add(steps, "Cleaning Up Materials", "Removing temporary and unused data blocks.", self.services.cleanup_materials, 2)

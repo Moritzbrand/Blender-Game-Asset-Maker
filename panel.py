@@ -102,7 +102,6 @@ class GAMEREADY_PT_settings_panel(bpy.types.Panel):
         suborm.prop(scene, "gameready_pack_as_orm")
         sub.prop(scene, "gameready_sample_count")
         sub.prop(scene, "gameready_auto_cage_extrusion")
-        sub.prop(scene, "gameready_stitch_baking_holes")
         sub_cage_extrusion = sub.column()
         sub_cage_extrusion.enabled = not scene.gameready_auto_cage_extrusion
         sub_cage_extrusion.prop(scene, "gameready_cage_extrusion")
