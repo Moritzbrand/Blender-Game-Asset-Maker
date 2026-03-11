@@ -10,12 +10,14 @@ bl_info = {
 
 import bpy
 
-from .operators import GAMEREADY_OT_create_game_asset
+from .operators import GAMEREADY_OT_create_game_asset, GAMEREADY_OT_result_dialog
 from .panel import GAMEREADY_PT_main_panel, GAMEREADY_PT_settings_panel
+from .scripts.progress_utils import ProgressUtils
 from . import properties
 
 
 classes = (
+    GAMEREADY_OT_result_dialog,
     GAMEREADY_OT_create_game_asset,
     GAMEREADY_PT_main_panel,
     GAMEREADY_PT_settings_panel,
@@ -24,15 +26,20 @@ classes = (
 
 def register():
     properties.register()
+    ProgressUtils.register()
+
     for cls in classes:
         bpy.utils.register_class(cls)
+
     print("Game Ready Addon enabled")
 
 
 def unregister():
-    properties.unregister()
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
+
+    ProgressUtils.unregister()
+    properties.unregister()
     print("Game Ready Addon disabled")
 
 

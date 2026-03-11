@@ -1,69 +1,145 @@
 import bpy
 
 
-class GameReadyProgressUtils:
-    @classmethod
-    def reset_runtime_state(cls, scene):
-        scene.gameready_job_running = False
-        scene.gameready_job_progress = 0.0
-        scene.gameready_job_current_step_label = ""
-        scene.gameready_job_status_text = ""
-        scene.gameready_job_result_text = ""
-        scene.gameready_job_preview_image = None
-
-    @classmethod
-    def begin_job(cls, scene):
-        cls.reset_runtime_state(scene)
-        scene.gameready_job_running = True
-        scene.gameready_job_status_text = "Preparing job"
-
-    @classmethod
-    def show_pending_step(cls, scene, step_label, step_index, total_step_count):
-        scene.gameready_job_current_step_label = step_label
-        scene.gameready_job_status_text = f"Step {step_index + 1} of {total_step_count}"
-
-    @classmethod
-    def mark_step_finished(
-        cls,
-        scene,
-        completed_step_count,
-        total_step_count,
-        preview_image=None,
-    ):
-        if total_step_count <= 0:
-            scene.gameready_job_progress = 100.0
-        else:
-            scene.gameready_job_progress = (completed_step_count / total_step_count) * 100.0
-
-        scene.gameready_job_status_text = (
-            f"Completed {completed_step_count} of {total_step_count} steps"
+class ProgressUtils:
+    @staticmethod
+    def register():
+        bpy.types.WindowManager.gameready_progress_running = bpy.props.BoolProperty(
+            default=False,
+            options={'SKIP_SAVE'},
+        )
+        bpy.types.WindowManager.gameready_progress_factor = bpy.props.FloatProperty(
+            default=0.0,
+            min=0.0,
+            max=1.0,
+            options={'SKIP_SAVE'},
+        )
+        bpy.types.WindowManager.gameready_progress_title = bpy.props.StringProperty(
+            default="",
+            options={'SKIP_SAVE'},
+        )
+        bpy.types.WindowManager.gameready_progress_detail = bpy.props.StringProperty(
+            default="",
+            options={'SKIP_SAVE'},
+        )
+        bpy.types.WindowManager.gameready_progress_is_baking = bpy.props.BoolProperty(
+            default=False,
+            options={'SKIP_SAVE'},
         )
 
-        if preview_image is not None:
-            scene.gameready_job_preview_image = preview_image
+    @staticmethod
+    def unregister():
+        for attribute_name in (
+            'gameready_progress_is_baking',
+            'gameready_progress_detail',
+            'gameready_progress_title',
+            'gameready_progress_factor',
+            'gameready_progress_running',
+        ):
+            if hasattr(bpy.types.WindowManager, attribute_name):
+                delattr(bpy.types.WindowManager, attribute_name)
 
-    @classmethod
-    def finish_job(cls, scene, result_text):
-        scene.gameready_job_running = False
-        scene.gameready_job_progress = 100.0
-        scene.gameready_job_current_step_label = "Finished"
-        scene.gameready_job_status_text = "Game asset creation completed"
-        scene.gameready_job_result_text = result_text
+    @staticmethod
+    def reset(window_manager):
+        window_manager.gameready_progress_running = False
+        window_manager.gameready_progress_factor = 0.0
+        window_manager.gameready_progress_title = ""
+        window_manager.gameready_progress_detail = ""
+        window_manager.gameready_progress_is_baking = False
 
-    @classmethod
-    def fail_job(cls, scene, error_text):
-        scene.gameready_job_running = False
-        scene.gameready_job_current_step_label = "Failed"
-        scene.gameready_job_status_text = error_text
-        scene.gameready_job_result_text = error_text
+    @staticmethod
+    def _detect_bake_phase(title, detail):
+        combined_text = f"{title or ''} {detail or ''}".lower()
+        return "baking" in combined_text or "bake" in combined_text
 
-    @classmethod
-    def tag_redraw_all_areas(cls, context):
+    @staticmethod
+    def begin(context, title, detail="", factor=0.0):
         window_manager = context.window_manager
-        for window in window_manager.windows:
-            screen = window.screen
-            if screen is None:
-                continue
+        window_manager.gameready_progress_running = True
+        window_manager.gameready_progress_factor = max(0.0, min(1.0, float(factor)))
+        window_manager.gameready_progress_title = title
+        window_manager.gameready_progress_detail = detail
+        window_manager.gameready_progress_is_baking = ProgressUtils._detect_bake_phase(title, detail)
 
-            for area in screen.areas:
-                area.tag_redraw()
+        try:
+            window_manager.progress_begin(0.0, 1.0)
+            window_manager.progress_update(window_manager.gameready_progress_factor)
+        except Exception:
+            pass
+
+        ProgressUtils.tag_redraw_all()
+
+    @staticmethod
+    def update(context, factor=None, title=None, detail=None):
+        window_manager = context.window_manager
+
+        if factor is not None:
+            window_manager.gameready_progress_factor = max(0.0, min(1.0, float(factor)))
+        if title is not None:
+            window_manager.gameready_progress_title = title
+        if detail is not None:
+            window_manager.gameready_progress_detail = detail
+
+        window_manager.gameready_progress_is_baking = ProgressUtils._detect_bake_phase(
+            window_manager.gameready_progress_title,
+            window_manager.gameready_progress_detail,
+        )
+
+        try:
+            window_manager.progress_update(window_manager.gameready_progress_factor)
+        except Exception:
+            pass
+
+        ProgressUtils.tag_redraw_all()
+
+    @staticmethod
+    def finish(context, title="Finished", detail=""):
+        window_manager = context.window_manager
+
+        window_manager.gameready_progress_factor = 1.0
+        window_manager.gameready_progress_title = title
+        window_manager.gameready_progress_detail = detail
+        window_manager.gameready_progress_running = False
+        window_manager.gameready_progress_is_baking = False
+
+        try:
+            window_manager.progress_update(1.0)
+        except Exception:
+            pass
+
+        try:
+            window_manager.progress_end()
+        except Exception:
+            pass
+
+        ProgressUtils.tag_redraw_all()
+
+    @staticmethod
+    def cancel(context, title="Cancelled", detail=""):
+        window_manager = context.window_manager
+
+        window_manager.gameready_progress_title = title
+        window_manager.gameready_progress_detail = detail
+        window_manager.gameready_progress_running = False
+        window_manager.gameready_progress_is_baking = False
+
+        try:
+            window_manager.progress_end()
+        except Exception:
+            pass
+
+        ProgressUtils.tag_redraw_all()
+
+    @staticmethod
+    def flush_ui():
+        ProgressUtils.tag_redraw_all()
+
+    @staticmethod
+    def tag_redraw_all():
+        for window_manager in bpy.data.window_managers:
+            for window in window_manager.windows:
+                screen = window.screen
+                if screen is None:
+                    continue
+                for area in screen.areas:
+                    area.tag_redraw()

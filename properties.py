@@ -189,24 +189,6 @@ class StringProperty(Property):
         )
 
 
-class PointerProperty(Property):
-    def __init__(self, attr_name: str, name: str, description: str, pointer_type, options=None):
-        super().__init__(attr_name, name, description, options=options)
-        self.pointer_type = pointer_type
-
-    def register(self):
-        setattr(
-            bpy.types.Scene,
-            self.attr_name,
-            bpy.props.PointerProperty(
-                name=self.name,
-                description=self.description,
-                type=self.pointer_type,
-                options=self.options,
-            ),
-        )
-
-
 PROPERTIES = [
     PathStringProperty(
         "gameready_output_dir",
@@ -244,7 +226,7 @@ PROPERTIES = [
     BoolProperty(
         "gameready_uv_unwrap",
         "UV Unwrap",
-        "Automatically create UVs for the new game asset using Smart UV Project",
+        "Automatically create UVs for the new game asset",
         True,
     ),
     BoolProperty(
@@ -468,13 +450,6 @@ PROPERTIES = [
         "Job Result",
         "Final result text of the last build job",
         default="",
-        options={'SKIP_SAVE'},
-    ),
-    PointerProperty(
-        "gameready_job_preview_image",
-        "Preview Image",
-        "Last baked texture preview image",
-        pointer_type=bpy.types.Image,
         options={'SKIP_SAVE'},
     ),
 ]

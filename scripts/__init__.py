@@ -5,7 +5,8 @@ from .export_utils import ExportUtils
 from .material_utils import MaterialUtils
 from .mesh_utils import MeshUtils
 from .object_utils import ObjectUtils
-from .progress_utils import GameReadyProgressUtils
+from .progress_utils import ProgressUtils
+from .uv_utils import UVUtils
 
 __all__ = [
     "BakingUtils",
@@ -15,5 +16,6 @@ __all__ = [
     "MaterialUtils",
     "MeshUtils",
     "ObjectUtils",
-    "GameReadyProgressUtils",
+    "ProgressUtils",
+    "UVUtils",
 ]

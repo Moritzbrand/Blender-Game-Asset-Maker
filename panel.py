@@ -10,34 +10,31 @@ class GAMEREADY_PT_main_panel(bpy.types.Panel):
 
     def draw(self, context):
         layout = self.layout
-        scene = context.scene
+        window_manager = context.window_manager
 
         action_box = layout.box()
         action_box.label(text="Create", icon='MOD_BUILD')
 
         create_row = action_box.row()
-        create_row.enabled = not scene.gameready_job_running
+        create_row.enabled = not window_manager.gameready_progress_running
         create_row.operator("gameready.create_game_asset", icon='DUPLICATE')
 
-        if scene.gameready_job_running:
+        if window_manager.gameready_progress_running:
             progress_box = layout.box()
-            progress_box.label(text="Processing", icon='TIME')
-            progress_box.label(text=scene.gameready_job_current_step_label or "Working...")
-            progress_box.prop(scene, "gameready_job_progress", slider=True, text="Progress")
-            progress_box.label(text=scene.gameready_job_status_text)
+            progress_box.label(text=window_manager.gameready_progress_title or "Processing", icon='TIME')
+            progress_box.progress(
+                factor=window_manager.gameready_progress_factor,
+                type='BAR',
+                text=f"{int(window_manager.gameready_progress_factor * 100)}%",
+            )
 
-            if scene.gameready_job_preview_image is not None:
-                progress_box.label(text=f"Last Texture: {scene.gameready_job_preview_image.name}")
-                progress_box.template_ID_preview(
-                    scene,
-                    "gameready_job_preview_image",
-                    rows=3,
-                    cols=6,
-                )
-        elif scene.gameready_job_result_text:
-            result_box = layout.box()
-            result_box.label(text="Last Result", icon='CHECKMARK')
-            result_box.label(text=scene.gameready_job_result_text[:120])
+            if window_manager.gameready_progress_detail:
+                progress_box.label(text=window_manager.gameready_progress_detail, icon='INFO')
+
+            if getattr(window_manager, "gameready_progress_is_baking", False):
+                hint_box = progress_box.box()
+                hint_box.label(text="Bake in progress", icon='RENDER_STILL')
+                hint_box.label(text="Watch Blender's status bar for the live bake progress.")
 
 
 class GAMEREADY_PT_settings_panel(bpy.types.Panel):
@@ -52,6 +49,8 @@ class GAMEREADY_PT_settings_panel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         scene = context.scene
+        window_manager = context.window_manager
+        layout.enabled = not window_manager.gameready_progress_running
 
         general_box = layout.box()
         general_box.label(text="General", icon='SETTINGS')
@@ -61,7 +60,7 @@ class GAMEREADY_PT_settings_panel(bpy.types.Panel):
         export_box.label(text="Export", icon='EXPORT')
         export_box.prop(scene, "gameready_export_files")
         export_sub = export_box.column()
-        export_sub.enabled = scene.gameready_export_files and not scene.gameready_job_running
+        export_sub.enabled = scene.gameready_export_files
         export_sub.prop(scene, "gameready_output_dir")
         export_sub.prop(scene, "gameready_export_format")
         export_sub.prop(scene, "gameready_export_preset")
@@ -69,7 +68,6 @@ class GAMEREADY_PT_settings_panel(bpy.types.Panel):
 
         material_box = layout.box()
         material_box.label(text="Material/Texture", icon='MATERIAL')
-        material_box.enabled = not scene.gameready_job_running
         material_box.prop(scene, "gameready_uv_unwrap")
         material_box.prop(scene, "gameready_shade_auto_smooth")
         sub_smooth = material_box.column()
@@ -103,7 +101,6 @@ class GAMEREADY_PT_settings_panel(bpy.types.Panel):
 
         mesh_box = layout.box()
         mesh_box.label(text="Mesh", icon='MESH_DATA')
-        mesh_box.enabled = not scene.gameready_job_running
         mesh_box.prop(scene, "gameready_unsubdivide")
         sub_unsubdivide = mesh_box.column()
         sub_unsubdivide.enabled = scene.gameready_unsubdivide
@@ -124,7 +121,7 @@ class GAMEREADY_PT_settings_panel(bpy.types.Panel):
 
         lod_box = mesh_box.box()
         sub_lod = lod_box.column()
-        sub_lod.enabled = scene.gameready_export_files and not scene.gameready_job_running
+        sub_lod.enabled = scene.gameready_export_files
         sub_lod.label(text="LOD", icon='MOD_DECIM')
         sub_lod.prop(scene, "gameready_generate_lods")
         sub = sub_lod.column()
