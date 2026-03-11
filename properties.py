@@ -104,11 +104,12 @@ class EnumProperty(Property):
 
 
 class IntProperty(Property):
-    def __init__(self, attr_name: str, name: str, description: str, default=0, min=0, max=100, options=None):
+    def __init__(self, attr_name: str, name: str, description: str, default=0, min=0, max=100, options=None, subtype='NONE'):
         super().__init__(attr_name, name, description, options=options)
         self.default = default
         self.min = min
         self.max = max
+        self.subtype = subtype
 
     def register(self):
         setattr(
@@ -120,6 +121,7 @@ class IntProperty(Property):
                 default=self.default,
                 min=self.min,
                 max=self.max,
+                subtype=self.subtype,
                 options=self.options,
             ),
         )
@@ -316,6 +318,15 @@ PROPERTIES = [
         ],
         default="1024",
     ),
+    IntProperty(
+        "gameready_texture_compression",
+        "Texture Compression",
+        "PNG compression effort for all exported baked textures (0 = fastest, 100 = smallest files)",
+        default=15,
+        min=0,
+        max=100,
+        subtype='PERCENTAGE',
+    ),
     BoolProperty(
         "gameready_generate_lods",
         "Generate LODs",
@@ -346,6 +357,12 @@ PROPERTIES = [
         "gameready_bake_emission",
         "Emission",
         "Bake emission from the original object's materials to the new game asset",
+        False,
+    ),
+    BoolProperty(
+        "gameready_bake_sss",
+        "Subsurface Scattering",
+        "Bake a subsurface scattering texture from Subsurface Weight multiplied by Subsurface Radius",
         False,
     ),
     BoolProperty(

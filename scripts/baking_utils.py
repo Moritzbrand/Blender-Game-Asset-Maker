@@ -1,20 +1,9 @@
-# Example:
-# BakingUtils.bake_normal_selected_to_active(
-#     bpy.context,
-#     high_poly_object,
-#     low_poly_object,
-#     normal_image,
-#     extrusion=0.02,
-#     margin=16,
-# )
-
 import bpy
+
+from .image_utils import ImageUtils
 
 
 class BakingUtils:
-    #-----------------------------
-    #---| Member Variables |------
-    #-----------------------------
     IMAGE_TEXTURE_NODE_TYPE = "ShaderNodeTexImage"
     MATERIAL_OUTPUT_NODE_TYPE = "ShaderNodeOutputMaterial"
     PRINCIPLED_BSDF_NODE_TYPE = "ShaderNodeBsdfPrincipled"
@@ -26,6 +15,7 @@ class BakingUtils:
         "ROUGHNESS",
         "METALLIC",
         "EMISSION",
+        "SSS",
     }
 
     SCALAR_EMIT_CHANNEL_NAMES = {
@@ -46,9 +36,14 @@ class BakingUtils:
         "Emission Strength",
     )
 
-    #------------------------------------
-    #---| Render Visibility Helpers |----
-    #------------------------------------
+    SSS_WEIGHT_INPUT_NAMES = (
+        "Subsurface Weight",
+        "Subsurface",
+    )
+    SSS_RADIUS_INPUT_NAMES = (
+        "Subsurface Radius",
+    )
+
     @classmethod
     def _iterate_renderable_layer_collections(
         cls,
@@ -124,9 +119,6 @@ class BakingUtils:
             if scene_object is not None:
                 scene_object.hide_render = hide_from_render
 
-    #-----------------------------
-    #---| Public Bake API |-------
-    #-----------------------------
     @classmethod
     def bake_normal_selected_to_active(
         cls,
@@ -190,9 +182,6 @@ class BakingUtils:
             use_tangent_normal_space=False,
         )
 
-    #--------------------------------
-    #---| Bake Execution Flow |------
-    #--------------------------------
     @classmethod
     def _bake_selected_to_active_image(
         cls,
@@ -243,7 +232,7 @@ class BakingUtils:
             margin=margin,
         )
 
-        cls._save_image_if_possible(target_image)
+        cls._save_image_if_possible(target_image, context.scene)
 
     @classmethod
     def _ensure_object_mode(cls, context):
@@ -290,9 +279,6 @@ class BakingUtils:
         active_node.select = True
         nodes.active = active_node
 
-    #----------------------------------
-    #---| Validation and Lookups |-----
-    #----------------------------------
     @classmethod
     def _require_mesh_object(cls, scene_object, argument_name):
         if scene_object is None:
@@ -360,64 +346,6 @@ class BakingUtils:
 
         return None
 
-    #------------------------------
-    #---| Image Utilities |--------
-    #------------------------------
-    @classmethod
-    def flip_normal_map_y(cls, image):
-        cls._require_image(image, "image")
-
-        image_pixels = list(image.pixels)
-        if not image_pixels:
-            return image
-
-        for pixel_start_index in range(0, len(image_pixels), 4):
-            green_channel_index = pixel_start_index + 1
-            image_pixels[green_channel_index] = 1.0 - image_pixels[green_channel_index]
-
-        cls._write_pixels_to_image(image, image_pixels)
-        return image
-
-    @classmethod
-    def _write_pixels_to_image(cls, image, image_pixels):
-        image.pixels[:] = image_pixels
-        image.update()
-        cls._save_image_if_possible(image)
-
-    @classmethod
-    def _save_image_if_possible(cls, image):
-        try:
-            if image.filepath_raw:
-                image.save()
-        except Exception:
-            pass
-
-    @classmethod
-    def _configure_image_for_png_output(cls, image):
-        try:
-            image.alpha_mode = 'STRAIGHT'
-        except Exception:
-            pass
-
-        try:
-            image.file_format = 'PNG'
-        except Exception:
-            pass
-
-    @classmethod
-    def _require_matching_image_sizes(cls, images, error_message):
-        image_sizes = [tuple(image.size) for image in images]
-        first_image_size = image_sizes[0]
-
-        for current_image_size in image_sizes[1:]:
-            if current_image_size != first_image_size:
-                raise ValueError(error_message)
-
-        return first_image_size
-
-    #-------------------------------------
-    #---| Emit Bake Material Setup |------
-    #-------------------------------------
     @classmethod
     def prepare_object_materials_for_emit_bake(cls, obj, channel):
         cls._require_mesh_object(obj, "obj")
@@ -464,6 +392,13 @@ class BakingUtils:
                     emission_proxy_node=emission_proxy_node,
                     links=links,
                 )
+            elif normalized_channel_name == "SSS":
+                cls._configure_sss_channel_on_emission_proxy(
+                    principled_bsdf_node=principled_bsdf_node,
+                    emission_proxy_node=emission_proxy_node,
+                    nodes=nodes,
+                    links=links,
+                )
             else:
                 source_input_socket = cls._get_principled_input_socket_for_emit_channel(
                     principled_bsdf_node=principled_bsdf_node,
@@ -505,6 +440,8 @@ class BakingUtils:
 
     @classmethod
     def _remove_all_links_from_socket(cls, links, socket):
+        if socket is None:
+            return
         for existing_link in list(socket.links):
             links.remove(existing_link)
 
@@ -523,7 +460,6 @@ class BakingUtils:
             return
 
         links.new(source_socket, emission_proxy_node.inputs["Color"])
-
 
     @classmethod
     def _configure_emission_channel_on_emission_proxy(
@@ -551,6 +487,65 @@ class BakingUtils:
             emission_proxy_node=emission_proxy_node,
             links=links,
         )
+
+    @classmethod
+    def _configure_sss_channel_on_emission_proxy(
+        cls,
+        principled_bsdf_node,
+        emission_proxy_node,
+        nodes,
+        links,
+    ):
+        if principled_bsdf_node is None:
+            return
+
+        sss_weight_input_socket = cls._get_first_existing_input_socket(
+            principled_bsdf_node,
+            cls.SSS_WEIGHT_INPUT_NAMES,
+        )
+        sss_radius_input_socket = cls._get_first_existing_input_socket(
+            principled_bsdf_node,
+            cls.SSS_RADIUS_INPUT_NAMES,
+        )
+
+        weight_default = cls._convert_socket_default_value_to_scalar(sss_weight_input_socket)
+        radius_default = cls._convert_socket_default_value_to_rgb_vector(sss_radius_input_socket)
+
+        weight_is_linked = sss_weight_input_socket is not None and sss_weight_input_socket.is_linked and len(sss_weight_input_socket.links) > 0
+        radius_is_linked = sss_radius_input_socket is not None and sss_radius_input_socket.is_linked and len(sss_radius_input_socket.links) > 0
+
+        if weight_is_linked or radius_is_linked:
+            multiply_node = nodes.new("ShaderNodeVectorMath")
+            multiply_node.name = "GR_EmitBakeHelper_SSSMultiply"
+            multiply_node.label = "GR Emit Bake SSS Multiply"
+            multiply_node.location = (emission_proxy_node.location.x - 260, emission_proxy_node.location.y - 80)
+            multiply_node.operation = 'SCALE'
+
+            vector_input = multiply_node.inputs[0]
+            scale_input = multiply_node.inputs.get("Scale") or multiply_node.inputs[-1]
+            vector_output = multiply_node.outputs.get("Vector") or multiply_node.outputs[0]
+
+            if radius_is_linked:
+                links.new(sss_radius_input_socket.links[0].from_socket, vector_input)
+            else:
+                vector_input.default_value = radius_default
+
+            if weight_is_linked:
+                links.new(sss_weight_input_socket.links[0].from_socket, scale_input)
+            else:
+                scale_input.default_value = weight_default
+
+            links.new(vector_output, emission_proxy_node.inputs["Color"])
+            emission_proxy_node.inputs["Strength"].default_value = 1.0
+            return
+
+        emission_proxy_node.inputs["Color"].default_value = (
+            radius_default[0] * weight_default,
+            radius_default[1] * weight_default,
+            radius_default[2] * weight_default,
+            1.0,
+        )
+        emission_proxy_node.inputs["Strength"].default_value = 1.0
 
     @classmethod
     def _apply_emission_color_to_emission_proxy(
@@ -613,7 +608,7 @@ class BakingUtils:
 
     @classmethod
     def _convert_socket_default_value_to_rgba(cls, socket):
-        default_value = getattr(socket, "default_value", 0.0)
+        default_value = getattr(socket, "default_value", 0.0) if socket is not None else 0.0
 
         if isinstance(default_value, (int, float)):
             grayscale_value = float(default_value)
@@ -646,10 +641,14 @@ class BakingUtils:
 
         return (0.0, 0.0, 0.0, 1.0)
 
+    @classmethod
+    def _convert_socket_default_value_to_rgb_vector(cls, socket):
+        rgba = cls._convert_socket_default_value_to_rgba(socket)
+        return (float(rgba[0]), float(rgba[1]), float(rgba[2]))
 
     @classmethod
     def _convert_socket_default_value_to_scalar(cls, socket):
-        default_value = getattr(socket, "default_value", 0.0)
+        default_value = getattr(socket, "default_value", 0.0) if socket is not None else 0.0
 
         if isinstance(default_value, (int, float)):
             return float(default_value)
@@ -663,85 +662,6 @@ class BakingUtils:
 
         return 0.0
 
-    #-----------------------------------
-    #---| Image Packing and Debug |-----
-    #-----------------------------------
     @classmethod
-    def combine_orm_images(
-        cls,
-        ao_image,
-        roughness_image,
-        metallic_image,
-        target_image,
-    ):
-        cls._require_image(ao_image, "ao_image")
-        cls._require_image(roughness_image, "roughness_image")
-        cls._require_image(metallic_image, "metallic_image")
-        cls._require_image(target_image, "target_image")
-
-        cls._require_matching_image_sizes(
-            images=[ao_image, roughness_image, metallic_image, target_image],
-            error_message="All ORM images must have the same size",
-        )
-
-        ambient_occlusion_pixels = list(ao_image.pixels)
-        roughness_pixels = list(roughness_image.pixels)
-        metallic_pixels = list(metallic_image.pixels)
-
-        combined_orm_pixels = [0.0] * len(ambient_occlusion_pixels)
-
-        for pixel_start_index in range(0, len(combined_orm_pixels), 4):
-            combined_orm_pixels[pixel_start_index + 0] = ambient_occlusion_pixels[pixel_start_index + 0]
-            combined_orm_pixels[pixel_start_index + 1] = roughness_pixels[pixel_start_index + 0]
-            combined_orm_pixels[pixel_start_index + 2] = metallic_pixels[pixel_start_index + 0]
-            combined_orm_pixels[pixel_start_index + 3] = 1.0
-
-        cls._configure_image_for_png_output(target_image)
-        cls._write_pixels_to_image(target_image, combined_orm_pixels)
-
-    @classmethod
-    def combine_rgb_and_alpha_images(
-        cls,
-        rgb_image,
-        alpha_image,
-        target_image,
-    ):
-        cls._require_image(rgb_image, "rgb_image")
-        cls._require_image(alpha_image, "alpha_image")
-        cls._require_image(target_image, "target_image")
-
-        cls._require_matching_image_sizes(
-            images=[rgb_image, alpha_image, target_image],
-            error_message="All images must have the same size",
-        )
-
-        rgb_pixels = list(rgb_image.pixels)
-        alpha_pixels = list(alpha_image.pixels)
-        combined_rgba_pixels = [0.0] * len(rgb_pixels)
-
-        for pixel_start_index in range(0, len(rgb_pixels), 4):
-            combined_rgba_pixels[pixel_start_index + 0] = rgb_pixels[pixel_start_index + 0]
-            combined_rgba_pixels[pixel_start_index + 1] = rgb_pixels[pixel_start_index + 1]
-            combined_rgba_pixels[pixel_start_index + 2] = rgb_pixels[pixel_start_index + 2]
-            combined_rgba_pixels[pixel_start_index + 3] = alpha_pixels[pixel_start_index + 0]
-
-        cls._configure_image_for_png_output(target_image)
-        cls._write_pixels_to_image(target_image, combined_rgba_pixels)
-
-    @classmethod
-    def debug_grayscale_range(cls, image, label="Image"):
-        if image is None:
-            print(f"{label}: image is None")
-            return
-
-        image_pixels = list(image.pixels)
-        grayscale_values = image_pixels[0::4]
-
-        if not grayscale_values:
-            print(f"{label}: no pixels found")
-            return
-
-        print(
-            f"{label}: value min={min(grayscale_values):.6f}, "
-            f"max={max(grayscale_values):.6f}"
-        )
+    def _save_image_if_possible(cls, image, scene):
+        ImageUtils.save_image_if_possible(image, scene=scene)

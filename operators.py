@@ -82,6 +82,7 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
             "temporary_obj_name": "",
             "game_asset_name": "",
             "created_image_names": {},
+            "created_image_filepaths": {},
             "visibility_state": {},
             "cleanup_stats": {
                 "removed_nodes": 0,
@@ -321,6 +322,16 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                     weight=8,
                 )
 
+            if scene.gameready_bake_sss:
+                self._add_step(
+                    steps,
+                    title="Baking Subsurface Scattering",
+                    detail="SSS bake is running. Watch Blender's status bar for the live bake progress.",
+                    function=self._step_bake_sss,
+                    weight=10,
+                    completed_detail="The subsurface scattering bake finished.",
+                )
+
             if (
                 scene.gameready_pack_as_orm
                 and scene.gameready_bake_ao
@@ -379,6 +390,15 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
                 weight=1,
             )
 
+        if scene.gameready_bake_sss:
+            self._add_step(
+                steps,
+                title="Restoring Blender SSS Preview",
+                detail="Reinserting the Blender-only subsurface preview texture after baking and export.",
+                function=self._step_restore_blender_sss_preview,
+                weight=1,
+            )
+
         self._add_step(
             steps,
             title="Finalizing",
@@ -396,6 +416,7 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
             or scene.gameready_bake_roughness
             or scene.gameready_bake_metallic
             or scene.gameready_bake_emission
+            or scene.gameready_bake_sss
         )
 
     def _get_object(self, object_name):
@@ -412,9 +433,17 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
         image_name = self._state["created_image_names"].get(image_key, "")
         return self._get_image(image_name)
 
+    def _get_created_image_filepath(self, image_key):
+        return self._state["created_image_filepaths"].get(image_key, "")
+
     def _store_created_images(self, created_images):
         self._state["created_image_names"] = {
             image_key: image.name
+            for image_key, image in created_images.items()
+            if image is not None
+        }
+        self._state["created_image_filepaths"] = {
+            image_key: str(getattr(image, "filepath_raw", "") or getattr(image, "filepath", ""))
             for image_key, image in created_images.items()
             if image is not None
         }
@@ -550,7 +579,7 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
         )
 
         if scene.gameready_flip_y_normal:
-            ImageUtils.flip_normal_map_y(normal_image)
+            ImageUtils.flip_normal_map_y(normal_image, scene=scene)
 
     def _step_bake_ao(self, context):
         scene = context.scene
@@ -592,6 +621,7 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
         )
 
     def _step_combine_base_color_and_alpha(self, context):
+        scene = context.scene
         alpha_image = self._get_created_image("base_color_alpha_tmp")
         final_image = self._get_created_image("base_color")
         ImageUtils.debug_grayscale_range(alpha_image, "Alpha TMP")
@@ -599,6 +629,7 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
             self._get_created_image("base_color_rgb_tmp"),
             alpha_image,
             final_image,
+            scene=scene,
         )
         ImageUtils.debug_grayscale_range(final_image, "Final BaseColor")
 
@@ -644,12 +675,27 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
             margin=self._state["bake_margin"],
         )
 
+    def _step_bake_sss(self, context):
+        scene = context.scene
+        temporary_obj = self._get_object(self._state["temporary_obj_name"])
+        game_asset = self._get_object(self._state["game_asset_name"])
+        BakingUtils.prepare_object_materials_for_emit_bake(temporary_obj, "SSS")
+        BakingUtils.bake_emit_selected_to_active(
+            context=context,
+            source_obj=temporary_obj,
+            target_obj=game_asset,
+            target_image=self._get_created_image("sss"),
+            extrusion=scene.gameready_cage_extrusion,
+            margin=self._state["bake_margin"],
+        )
+
     def _step_pack_orm(self, context):
         ImageUtils.combine_orm_images(
             self._get_created_image("ao"),
             self._get_created_image("roughness"),
             self._get_created_image("metallic"),
             self._get_created_image("orm"),
+            scene=context.scene,
         )
 
     def _step_bake_emission(self, context):
@@ -692,12 +738,28 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
         game_asset = self._get_object(self._state["game_asset_name"])
         if game_asset is not None:
             MaterialUtils.apply_normal_y_display_fix_to_object(game_asset)
+            MaterialUtils.refresh_material_preview_on_object(game_asset, context=context)
+
+    def _step_restore_blender_sss_preview(self, context):
+        game_asset = self._get_object(self._state["game_asset_name"])
+        if game_asset is None:
+            return
+
+        MaterialUtils.apply_sss_preview_to_object(
+            obj=game_asset,
+            image=self._get_created_image("sss"),
+            image_filepath=self._get_created_image_filepath("sss"),
+        )
+        MaterialUtils.refresh_material_preview_on_object(game_asset, context=context)
 
     def _step_finalize_scene(self, context):
         game_asset = self._get_object(self._state["game_asset_name"])
         temporary_obj = self._get_object(self._state["temporary_obj_name"])
 
         self._select_single_object(context, game_asset)
+
+        if game_asset is not None:
+            MaterialUtils.refresh_material_preview_on_object(game_asset, context=context)
 
         if temporary_obj is not None:
             bpy.data.objects.remove(temporary_obj, do_unlink=True)

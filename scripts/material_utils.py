@@ -2,8 +2,144 @@ import os
 
 import bpy
 
+from .image_utils import ImageUtils
+
 
 class MaterialUtils:
+    @staticmethod
+    def _refresh_material_preview(material, context=None):
+        if material is None or not material.use_nodes or material.node_tree is None:
+            return
+
+        node_tree = material.node_tree
+        nodes = node_tree.nodes
+        links = node_tree.links
+
+        output_node = None
+        try:
+            output_node = node_tree.get_output_node("ALL")
+        except Exception:
+            output_node = None
+
+        if output_node is None:
+            for node in nodes:
+                if node.bl_idname == "ShaderNodeOutputMaterial":
+                    if getattr(node, "is_active_output", False):
+                        output_node = node
+                        break
+
+        if output_node is None:
+            for node in nodes:
+                if node.bl_idname == "ShaderNodeOutputMaterial":
+                    output_node = node
+                    break
+
+        principled_bsdf_node = None
+        for node in nodes:
+            if node.bl_idname == "ShaderNodeBsdfPrincipled":
+                principled_bsdf_node = node
+                break
+
+        if output_node is None or principled_bsdf_node is None:
+            return
+
+        surface_input = output_node.inputs.get("Surface")
+        bsdf_output = principled_bsdf_node.outputs.get("BSDF")
+
+        if surface_input is not None and bsdf_output is not None:
+            MaterialUtils._remove_links_from_socket(links, surface_input)
+            links.new(bsdf_output, surface_input)
+
+        try:
+            node_tree.update()
+        except Exception:
+            pass
+
+        try:
+            node_tree.update_tag()
+        except Exception:
+            pass
+
+        try:
+            material.update_tag(refresh={'DATA'})
+        except Exception:
+            pass
+
+        if context is not None:
+            try:
+                context.view_layer.update()
+            except Exception:
+                pass
+
+    @staticmethod
+    def refresh_material_preview_on_object(obj, context=None):
+        if obj is None or obj.type != 'MESH':
+            return 0
+
+        refreshed_count = 0
+        seen_material_pointers = set()
+
+        for material_slot in obj.material_slots:
+            material = material_slot.material
+            if material is None:
+                continue
+
+            material_pointer = material.as_pointer()
+            if material_pointer in seen_material_pointers:
+                continue
+            seen_material_pointers.add(material_pointer)
+
+            MaterialUtils._refresh_material_preview(material, context=context)
+            refreshed_count += 1
+
+        return refreshed_count
+
+    @staticmethod
+    def _refresh_material_output(material):
+        if material is None or not material.use_nodes or material.node_tree is None:
+            return
+
+        nodes = material.node_tree.nodes
+        links = material.node_tree.links
+
+        output_node = None
+        principled_bsdf_node = None
+
+        for node in nodes:
+            if output_node is None and node.bl_idname == "ShaderNodeOutputMaterial":
+                if getattr(node, "is_active_output", False):
+                    output_node = node
+
+            if principled_bsdf_node is None and node.bl_idname == "ShaderNodeBsdfPrincipled":
+                principled_bsdf_node = node
+
+        if output_node is None:
+            for node in nodes:
+                if node.bl_idname == "ShaderNodeOutputMaterial":
+                    output_node = node
+                    break
+
+        if output_node is None or principled_bsdf_node is None:
+            return
+
+        surface_input = output_node.inputs.get("Surface")
+        bsdf_output = principled_bsdf_node.outputs.get("BSDF")
+
+        if surface_input is None or bsdf_output is None:
+            return
+
+        MaterialUtils._remove_links_from_socket(links, surface_input)
+        links.new(bsdf_output, surface_input)
+
+        try:
+            material.node_tree.update_tag()
+        except Exception:
+            pass
+
+        try:
+            material.update_tag(refresh={'DATA'})
+        except Exception:
+            pass
     @staticmethod
     def _node_has_any_linked_output(node):
         for socket in node.outputs:
@@ -119,7 +255,7 @@ class MaterialUtils:
         os.makedirs(path, exist_ok=True)
 
     @staticmethod
-    def _new_placeholder_image(scene, obj_name, suffix, size, alpha=False, is_data=False):
+    def _new_placeholder_image(scene, obj_name, suffix, size, alpha=False, is_data=False, color_mode='RGBA'):
         image_name = f"{obj_name}_{suffix}"
         image = bpy.data.images.new(
             name=image_name,
@@ -150,6 +286,13 @@ class MaterialUtils:
         except Exception:
             pass
 
+        ImageUtils.configure_image_for_png_output(
+            image,
+            color_mode=color_mode,
+            compression=int(getattr(scene, "gameready_texture_compression", 15)),
+            channel_packed=is_data,
+        )
+
         return image
 
     @staticmethod
@@ -174,6 +317,12 @@ class MaterialUtils:
         if node is None:
             return False
         return str(getattr(node, "name", "")).startswith("GR_NormalYDisplayFix_")
+
+    @staticmethod
+    def _is_sss_preview_node(node):
+        if node is None:
+            return False
+        return str(getattr(node, "name", "")).startswith("GR_SSSPreview_")
 
     @staticmethod
     def _remove_links_from_socket(links, socket):
@@ -218,15 +367,11 @@ class MaterialUtils:
                 nodes.remove(node)
 
     @staticmethod
-    def _connect_normal_texture_directly_to_normal_map(links, normal_texture_node, normal_map_node):
-        texture_color_output = normal_texture_node.outputs.get("Color")
-        normal_map_color_input = normal_map_node.inputs.get("Color")
-
-        if texture_color_output is None or normal_map_color_input is None:
-            return
-
-        MaterialUtils._remove_links_from_socket(links, normal_map_color_input)
-        links.new(texture_color_output, normal_map_color_input)
+    def _remove_existing_sss_preview_nodes(nodes):
+        for node in list(nodes):
+            node_name = str(getattr(node, "name", ""))
+            if node_name.startswith("GR_SSSPreview_"):
+                nodes.remove(node)
 
     @staticmethod
     def _insert_normal_y_display_fix_between_texture_and_normal_map(
@@ -333,6 +478,119 @@ class MaterialUtils:
         return fixed_material_count
 
     @staticmethod
+    def _load_image_from_path(image_filepath):
+        if not image_filepath:
+            return None
+
+        try:
+            absolute_path = bpy.path.abspath(image_filepath)
+        except Exception:
+            absolute_path = image_filepath
+
+        if not absolute_path or not os.path.exists(absolute_path):
+            return None
+
+        try:
+            image = bpy.data.images.load(absolute_path, check_existing=True)
+        except Exception:
+            return None
+
+        try:
+            image.colorspace_settings.name = "Non-Color"
+        except Exception:
+            pass
+
+        return image
+
+    @staticmethod
+    def apply_sss_preview_to_material(material, image=None, image_filepath=""):
+        if material is None or not material.use_nodes or material.node_tree is None:
+            return False
+
+        if image is None:
+            image = MaterialUtils._load_image_from_path(image_filepath)
+        if image is None:
+            return False
+
+        nodes = material.node_tree.nodes
+        links = material.node_tree.links
+
+        principled_bsdf_node = None
+        for node in nodes:
+            if node.bl_idname == "ShaderNodeBsdfPrincipled":
+                principled_bsdf_node = node
+                break
+
+        if principled_bsdf_node is None:
+            return False
+
+        sss_radius_input = MaterialUtils._get_bsdf_input(principled_bsdf_node, "Subsurface Radius")
+        sss_weight_input = MaterialUtils._get_bsdf_input(principled_bsdf_node, "Subsurface Weight", "Subsurface")
+
+        if sss_radius_input is None or sss_weight_input is None:
+            return False
+
+        MaterialUtils._remove_existing_sss_preview_nodes(nodes)
+        MaterialUtils._remove_links_from_socket(links, sss_radius_input)
+        MaterialUtils._remove_links_from_socket(links, sss_weight_input)
+
+        preview_frame = nodes.new("NodeFrame")
+        preview_frame.name = "GR_SSSPreview_Frame"
+        preview_frame.label = "GR Subsurface Preview"
+        preview_frame.location = (-1300, -950)
+
+        preview_tex = nodes.new("ShaderNodeTexImage")
+        preview_tex.name = "GR_SSSPreview_Texture"
+        preview_tex.label = "GR Subsurface Export Texture"
+        preview_tex.image = image
+        preview_tex.location = (-1200, -820)
+        preview_tex.parent = preview_frame
+
+        rgb_to_bw = nodes.new("ShaderNodeRGBToBW")
+        rgb_to_bw.name = "GR_SSSPreview_RGBToBW"
+        rgb_to_bw.label = "GR Subsurface Weight"
+        rgb_to_bw.location = (-930, -980)
+        rgb_to_bw.parent = preview_frame
+
+        try:
+            preview_tex.image.colorspace_settings.name = "Non-Color"
+        except Exception:
+            pass
+
+        # RGB -> Radius
+        links.new(preview_tex.outputs["Color"], sss_radius_input)
+
+        # RGB -> grayscale -> Weight
+        links.new(preview_tex.outputs["Color"], rgb_to_bw.inputs["Color"])
+        links.new(rgb_to_bw.outputs["Val"], sss_weight_input)
+
+        MaterialUtils._refresh_material_preview(material)
+        return True
+
+    @staticmethod
+    def apply_sss_preview_to_object(obj, image=None, image_filepath=""):
+        if obj is None or obj.type != 'MESH':
+            return 0
+
+        fixed_material_count = 0
+        seen_material_pointers = set()
+
+        for material_slot in obj.material_slots:
+            material = material_slot.material
+            if material is None:
+                continue
+
+            material_pointer = material.as_pointer()
+            if material_pointer in seen_material_pointers:
+                continue
+            seen_material_pointers.add(material_pointer)
+
+            if MaterialUtils.apply_sss_preview_to_material(material, image=image, image_filepath=image_filepath):
+                fixed_material_count += 1
+
+        return fixed_material_count
+
+    @staticmethod
     def setup_bake_material(obj, scene):
         if obj is None or obj.type != 'MESH':
             raise ValueError("Object must be a mesh")
@@ -384,6 +642,7 @@ class MaterialUtils:
                 size,
                 alpha=scene.gameready_bake_alpha,
                 is_data=False,
+                color_mode='RGBA' if scene.gameready_bake_alpha else 'RGB',
             )
             created_images["base_color"] = final_img
 
@@ -402,6 +661,7 @@ class MaterialUtils:
                     size,
                     alpha=False,
                     is_data=False,
+                    color_mode='RGB',
                 )
                 created_images["base_color_rgb_tmp"] = rgb_tmp
                 MaterialUtils._add_image_node(nodes, rgb_tmp, "Base Color RGB Bake", x_tex, y)
@@ -414,6 +674,7 @@ class MaterialUtils:
                     size,
                     alpha=False,
                     is_data=True,
+                    color_mode='BW',
                 )
                 created_images["base_color_alpha_tmp"] = alpha_tmp
                 MaterialUtils._add_image_node(nodes, alpha_tmp, "Base Color Alpha Bake", x_tex, y)
@@ -427,12 +688,27 @@ class MaterialUtils:
                 size,
                 alpha=False,
                 is_data=False,
+                color_mode='RGB',
             )
             created_images["emission"] = img
 
             tex = MaterialUtils._add_image_node(nodes, img, "Emission", x_tex, y)
             if emission_input is not None:
                 links.new(tex.outputs["Color"], emission_input)
+            y += y_step
+
+        if scene.gameready_bake_sss:
+            img = MaterialUtils._new_placeholder_image(
+                scene,
+                obj.name,
+                "SSS",
+                size,
+                alpha=False,
+                is_data=True,
+                color_mode='RGB',
+            )
+            created_images["sss"] = img
+            MaterialUtils._add_image_node(nodes, img, "Subsurface Scattering Bake", x_tex, y)
             y += y_step
 
         if scene.gameready_bake_normal:
@@ -443,6 +719,7 @@ class MaterialUtils:
                 size,
                 alpha=False,
                 is_data=True,
+                color_mode='RGB',
             )
             created_images["normal"] = img
 
@@ -464,6 +741,7 @@ class MaterialUtils:
                 size,
                 alpha=False,
                 is_data=True,
+                color_mode='BW',
             )
             created_images["ao"] = img
             MaterialUtils._add_image_node(nodes, img, "AO", x_tex, y)
@@ -477,6 +755,7 @@ class MaterialUtils:
                 size,
                 alpha=False,
                 is_data=True,
+                color_mode='BW',
             )
             created_images["roughness"] = img
 
@@ -493,6 +772,7 @@ class MaterialUtils:
                 size,
                 alpha=False,
                 is_data=True,
+                color_mode='BW',
             )
             created_images["metallic"] = img
 
@@ -516,6 +796,7 @@ class MaterialUtils:
                 size,
                 alpha=False,
                 is_data=True,
+                color_mode='RGB',
             )
             created_images["orm"] = img
 

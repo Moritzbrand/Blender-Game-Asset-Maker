@@ -77,11 +77,13 @@ class GAMEREADY_PT_settings_panel(bpy.types.Panel):
         sub = material_box.column()
         sub.enabled = scene.gameready_bake_textures
         sub.prop(scene, "gameready_texture_size")
+        sub.prop(scene, "gameready_texture_compression")
         sub.prop(scene, "gameready_bake_base_color")
         subsub = sub.column()
         subsub.enabled = scene.gameready_bake_base_color
         subsub.prop(scene, "gameready_bake_alpha")
         sub.prop(scene, "gameready_bake_emission")
+        sub.prop(scene, "gameready_bake_sss")
         sub.prop(scene, "gameready_bake_normal")
         sub_flip = sub.column()
         sub_flip.enabled = scene.gameready_bake_normal
