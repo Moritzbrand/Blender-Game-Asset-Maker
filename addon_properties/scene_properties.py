@@ -1,3 +1,5 @@
+# Purpose: scene properties module.
+# Example: import scene_properties
 from ..scripts.export_utils import MaterialExportStrategyRegistry
 from .export_enums import (
     get_export_format_enum_items,

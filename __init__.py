@@ -1,3 +1,5 @@
+# Purpose:   init   module.
+# Example: import package
 bl_info = {
     "name": "Game Ready Addon",
     "author": "Moritz Brand",

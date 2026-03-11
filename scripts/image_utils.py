@@ -1,3 +1,5 @@
+# Purpose: image utils module.
+# Example: import image_utils
 import bpy
 
 

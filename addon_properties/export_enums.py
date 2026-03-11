@@ -1,4 +1,7 @@
+# Purpose: export enums module.
+# Example: import export_enums
 from ..scripts.export_utils import ExportPresetCatalog, ExportStrategyRegistry
+from ..scripts.settings_utils import AddonSettings
 
 _export_format_enum_cache = []
 _export_preset_enum_cache = []
@@ -12,9 +15,13 @@ def get_export_format_enum_items(self, context):
 
 def get_export_preset_enum_items(self, context):
     global _export_preset_enum_cache
-    export_format_identifier = "FBX"
+    export_format_identifier = AddonSettings.get_value("defaults.export_format", "FBX")
     if context is not None and context.scene is not None:
-        export_format_identifier = getattr(context.scene, "gameready_export_format", "FBX")
+        export_format_identifier = getattr(
+            context.scene,
+            "gameready_export_format",
+            AddonSettings.get_value("defaults.export_format", "FBX"),
+        )
 
     _export_preset_enum_cache = ExportPresetCatalog.build_preset_enum_items(export_format_identifier)
     return _export_preset_enum_cache

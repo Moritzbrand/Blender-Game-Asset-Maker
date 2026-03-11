@@ -1,3 +1,5 @@
+# Purpose: material utils module.
+# Example: import material_utils
 import os
 
 import bpy

@@ -1,3 +1,5 @@
+# Purpose: property types module.
+# Example: import property_types
 import bpy
 
 

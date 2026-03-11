@@ -1,3 +1,5 @@
+# Purpose: result dialog module.
+# Example: import result_dialog
 import bpy
 
 

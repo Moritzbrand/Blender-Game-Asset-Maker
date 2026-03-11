@@ -1,3 +1,5 @@
+# Purpose: uv utils module.
+# Example: import uv_utils
 import math
 import bpy
 

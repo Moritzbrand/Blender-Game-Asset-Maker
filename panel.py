@@ -1,3 +1,5 @@
+# Purpose: panel module.
+# Example: import panel
 import bpy
 
 

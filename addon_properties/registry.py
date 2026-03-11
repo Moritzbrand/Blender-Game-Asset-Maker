@@ -1,3 +1,5 @@
+# Purpose: registry module.
+# Example: import registry
 from .scene_properties import SCENE_PROPERTIES
 
 

@@ -1,8 +1,12 @@
+# Purpose: export utils module.
+# Example: import export_utils
 import ast
 import json
 import os
 
 import bpy
+
+from .settings_utils import AddonSettings
 
 
 class ExportPresetFileParser:
@@ -40,7 +44,10 @@ class ExportPresetFileParser:
 
 
 class ExportPresetCatalog:
-    ADDON_PRESET_FILE_NAME = "export_presets.json"
+    ADDON_PRESET_FILE_NAME = AddonSettings.get_value(
+        "export.preset_file_name",
+        "export_presets.json",
+    )
     USER_PRESET_SOURCE = "USER_PRESET"
     ADDON_PRESET_SOURCE = "ADDON_PRESET"
 
@@ -103,6 +110,7 @@ class ExportPresetCatalog:
     def _load_addon_json_preset_descriptors(cls, export_strategy):
         addon_preset_file_path = os.path.join(
             os.path.dirname(__file__),
+            "data",
             cls.ADDON_PRESET_FILE_NAME,
         )
 
@@ -211,7 +219,10 @@ class BaseExportStrategy:
         absolute_output_directory = bpy.path.abspath(output_dir)
         os.makedirs(absolute_output_directory, exist_ok=True)
 
-        export_file_name = file_name or "export"
+        export_file_name = file_name or AddonSettings.get_value(
+            "defaults.export_file_name",
+            "export",
+        )
 
         if not export_file_name.lower().endswith(self.file_extension.lower()):
             export_file_name = f"{export_file_name}{self.file_extension}"
@@ -249,26 +260,14 @@ class FbxExportStrategy(BaseExportStrategy):
     def get_default_operator_settings(self, export_file_path):
         operator_settings = super().get_default_operator_settings(export_file_path)
         operator_settings.update(
-            {
-                "use_selection": True,
-                "axis_forward": "-Y",
-                "axis_up": "Z",
-                "global_scale": 1.0,
-                "apply_unit_scale": True,
-                "use_space_transform": True,
-                "bake_space_transform": False,
-                "use_mesh_modifiers": True,
-                "use_mesh_modifiers_render": True,
-            }
+            dict(AddonSettings.get_value("export.fbx", {}))
         )
         return operator_settings
 
     def get_forced_operator_settings(self, export_file_path):
         operator_settings = super().get_forced_operator_settings(export_file_path)
         operator_settings.update(
-            {
-                "use_selection": True,
-            }
+            {"use_selection": AddonSettings.get_value("export.fbx.use_selection", True)}
         )
         return operator_settings
 
@@ -285,20 +284,14 @@ class GlbExportStrategy(BaseExportStrategy):
     def get_default_operator_settings(self, export_file_path):
         operator_settings = super().get_default_operator_settings(export_file_path)
         operator_settings.update(
-            {
-                "use_selection": True,
-                "export_format": "GLB",
-            }
+            dict(AddonSettings.get_value("export.glb", {}))
         )
         return operator_settings
 
     def get_forced_operator_settings(self, export_file_path):
         operator_settings = super().get_forced_operator_settings(export_file_path)
         operator_settings.update(
-            {
-                "use_selection": True,
-                "export_format": "GLB",
-            }
+            dict(AddonSettings.get_value("export.glb", {}))
         )
         return operator_settings
 
@@ -315,20 +308,14 @@ class GltfSeparateExportStrategy(BaseExportStrategy):
     def get_default_operator_settings(self, export_file_path):
         operator_settings = super().get_default_operator_settings(export_file_path)
         operator_settings.update(
-            {
-                "use_selection": True,
-                "export_format": "GLTF_SEPARATE",
-            }
+            dict(AddonSettings.get_value("export.gltf", {}))
         )
         return operator_settings
 
     def get_forced_operator_settings(self, export_file_path):
         operator_settings = super().get_forced_operator_settings(export_file_path)
         operator_settings.update(
-            {
-                "use_selection": True,
-                "export_format": "GLTF_SEPARATE",
-            }
+            dict(AddonSettings.get_value("export.gltf", {}))
         )
         return operator_settings
 
@@ -345,18 +332,14 @@ class ObjExportStrategy(BaseExportStrategy):
     def get_default_operator_settings(self, export_file_path):
         operator_settings = super().get_default_operator_settings(export_file_path)
         operator_settings.update(
-            {
-                "export_selected_objects": True,
-            }
+            dict(AddonSettings.get_value("export.obj", {}))
         )
         return operator_settings
 
     def get_forced_operator_settings(self, export_file_path):
         operator_settings = super().get_forced_operator_settings(export_file_path)
         operator_settings.update(
-            {
-                "export_selected_objects": True,
-            }
+            dict(AddonSettings.get_value("export.obj", {}))
         )
         return operator_settings
 
@@ -451,7 +434,8 @@ class ExportUtils:
             return []
 
         step = 1.0 / (lod_count + 1)
-        return [round(step * i, 6) for i in range(1, lod_count + 1)]
+        lod_ratio_precision = AddonSettings.get_value("export.lod_ratio_precision", 6)
+        return [round(step * i, lod_ratio_precision) for i in range(1, lod_count + 1)]
 
     @staticmethod
     def apply_collapse_decimate_for_export(context, obj, ratio):
@@ -582,7 +566,12 @@ class ExportUtils:
             material_export_strategy_identifier
         )
         if material_export_strategy is None:
-            material_export_strategy = MaterialExportStrategyRegistry.get_strategy("STRIP_MATERIALS")
+            material_export_strategy = MaterialExportStrategyRegistry.get_strategy(
+                AddonSettings.get_value(
+                    "defaults.material_export_strategy",
+                    "STRIP_MATERIALS",
+                )
+            )
 
         exported_file_paths = []
 

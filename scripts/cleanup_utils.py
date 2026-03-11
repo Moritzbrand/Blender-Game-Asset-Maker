@@ -1,3 +1,5 @@
+# Purpose: cleanup utils module.
+# Example: import cleanup_utils
 import bpy
 
 from .baking_utils import BakingUtils
