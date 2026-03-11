@@ -91,6 +91,10 @@ class GameAssetWorkflowServices:
         )
         self._track_temporary_texture_coordinate_empties(temporary_empties)
 
+    def prepare_materials_for_transform_and_join(self, context, objects):
+        MaterialUtils.make_materials_single_user_for_objects(objects)
+        self.prepare_texture_coordinate_node_object_references(context, objects)
+
     def store_created_images(self, created_images):
         self.state.created_image_names = {
             image_key: image.name
@@ -113,10 +117,11 @@ class GameAssetWorkflowServices:
         ObjectUtils.select_objects(context, source_objects)
         temporary_objects = ObjectUtils.duplicate_selected(context)
 
+        self.prepare_materials_for_transform_and_join(context, temporary_objects)
+
         if scene.gameready_apply_rot_scale:
             ObjectUtils.apply_transform_to_selected(context)
 
-        self.prepare_texture_coordinate_node_object_references(context, temporary_objects)
         MeshUtils.apply_modifiers_to_selected(context)
         temporary_object = MeshUtils.join_objects(context, temporary_objects)
         if temporary_object is None:
@@ -130,13 +135,14 @@ class GameAssetWorkflowServices:
         ObjectUtils.select_objects(context, self._objects_for_game_asset_build(context))
         new_objects = ObjectUtils.duplicate_selected(context)
 
+        self.prepare_materials_for_transform_and_join(context, new_objects)
+
         if not self._use_selected_to_active_mode(context) and scene.gameready_unsubdivide:
             MeshUtils.add_unsubdivide_to_objects(new_objects, scene.gameready_unsubdivide_iterations * 2)
 
         if scene.gameready_apply_rot_scale:
             ObjectUtils.apply_transform_to_selected(context)
 
-        self.prepare_texture_coordinate_node_object_references(context, new_objects)
         MeshUtils.apply_modifiers_to_selected(context)
         if self._use_selected_to_active_mode(context):
             game_asset = MeshUtils.join_objects(context, new_objects)

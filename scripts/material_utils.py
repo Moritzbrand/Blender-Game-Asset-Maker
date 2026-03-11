@@ -853,6 +853,29 @@ class MaterialUtils:
         return texture_coordinate_nodes
 
     @staticmethod
+    def _texture_coordinate_nodes_requiring_temporary_object(material, source_object):
+        if material is None or not material.use_nodes or material.node_tree is None:
+            return []
+
+        nodes_to_retarget = []
+        for node in material.node_tree.nodes:
+            if node.bl_idname != "ShaderNodeTexCoord":
+                continue
+
+            referenced_object = getattr(node, "object", None)
+            if referenced_object is None or referenced_object == source_object:
+                nodes_to_retarget.append(node)
+
+        return nodes_to_retarget
+
+    @staticmethod
+    def make_materials_single_user_for_objects(objects):
+        for obj in objects:
+            if obj is None or obj.type != 'MESH':
+                continue
+            MaterialUtils.make_materials_single_user(obj)
+
+    @staticmethod
     def assign_temporary_texture_coordinate_objects(source_objects, collection, empty_name_prefix="GR_TexCoordTemp"):
         if collection is None:
             raise ValueError("collection is required")
@@ -866,7 +889,7 @@ class MaterialUtils:
             nodes_to_update = []
             for material in MaterialUtils._iter_materials_from_objects([source_object]):
                 nodes_to_update.extend(
-                    MaterialUtils._texture_coordinate_nodes_without_object_reference(material)
+                    MaterialUtils._texture_coordinate_nodes_requiring_temporary_object(material, source_object)
                 )
 
             if not nodes_to_update:
