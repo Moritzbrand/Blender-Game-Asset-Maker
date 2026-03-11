@@ -820,70 +820,6 @@ class MaterialUtils:
         return mat, created_images
 
 
-
-    @staticmethod
-    def _iter_materials_from_objects(objects):
-        seen_material_pointers = set()
-        for obj in objects:
-            if obj is None or obj.type != 'MESH':
-                continue
-            for material_slot in obj.material_slots:
-                material = material_slot.material
-                if material is None:
-                    continue
-                material_pointer = material.as_pointer()
-                if material_pointer in seen_material_pointers:
-                    continue
-                seen_material_pointers.add(material_pointer)
-                yield material
-
-    @staticmethod
-    def _texture_coordinate_nodes_without_object_reference(material):
-        if material is None or not material.use_nodes or material.node_tree is None:
-            return []
-
-        texture_coordinate_nodes = []
-        for node in material.node_tree.nodes:
-            if node.bl_idname != "ShaderNodeTexCoord":
-                continue
-            if getattr(node, "object", None) is not None:
-                continue
-            texture_coordinate_nodes.append(node)
-
-        return texture_coordinate_nodes
-
-    @staticmethod
-    def assign_temporary_texture_coordinate_objects(source_objects, collection, empty_name_prefix="GR_TexCoordTemp"):
-        if collection is None:
-            raise ValueError("collection is required")
-
-        empty_objects = []
-
-        for source_object in source_objects:
-            if source_object is None:
-                continue
-
-            nodes_to_update = []
-            for material in MaterialUtils._iter_materials_from_objects([source_object]):
-                nodes_to_update.extend(
-                    MaterialUtils._texture_coordinate_nodes_without_object_reference(material)
-                )
-
-            if not nodes_to_update:
-                continue
-
-            empty_object = bpy.data.objects.new(name=f"{empty_name_prefix}_{source_object.name}", object_data=None)
-            empty_object.empty_display_type = 'PLAIN_AXES'
-            empty_object.empty_display_size = max(0.01, source_object.dimensions.length * 0.05)
-            empty_object.matrix_world = source_object.matrix_world.copy()
-            collection.objects.link(empty_object)
-            empty_objects.append(empty_object)
-
-            for node in nodes_to_update:
-                node.object = empty_object
-
-        return empty_objects
-
     @staticmethod
     def ensure_standard_material_on_empty_slots(obj, material_name_prefix="Gameready_Standard"):
         """Assign a temporary standard material to any empty material slots.
@@ -922,18 +858,6 @@ class MaterialUtils:
             })
 
         return assignment_records
-
-
-    @staticmethod
-    def remove_temporary_objects_by_name(object_names):
-        removed_count = 0
-        for object_name in object_names:
-            temporary_object = bpy.data.objects.get(object_name)
-            if temporary_object is None:
-                continue
-            bpy.data.objects.remove(temporary_object, do_unlink=True)
-            removed_count += 1
-        return removed_count
 
     @staticmethod
     def remove_temporary_material_assignments(obj, assignment_records):
