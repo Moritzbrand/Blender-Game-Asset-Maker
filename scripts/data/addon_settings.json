@@ -1,0 +1,33 @@
+{
+  "defaults": {
+    "export_format": "FBX",
+    "material_export_strategy": "STRIP_MATERIALS",
+    "export_file_name": "export"
+  },
+  "export": {
+    "preset_file_name": "export_presets.json",
+    "lod_ratio_precision": 6,
+    "fbx": {
+      "use_selection": true,
+      "axis_forward": "-Y",
+      "axis_up": "Z",
+      "global_scale": 1.0,
+      "apply_unit_scale": true,
+      "use_space_transform": true,
+      "bake_space_transform": false,
+      "use_mesh_modifiers": true,
+      "use_mesh_modifiers_render": true
+    },
+    "glb": {
+      "use_selection": true,
+      "export_format": "GLB"
+    },
+    "gltf": {
+      "use_selection": true,
+      "export_format": "GLTF_SEPARATE"
+    },
+    "obj": {
+      "export_selected_objects": true
+    }
+  }
+}

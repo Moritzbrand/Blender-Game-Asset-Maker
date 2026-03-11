@@ -1,3 +1,5 @@
+# Purpose: workflow services module.
+# Example: import workflow_services
 import math
 
 import bpy

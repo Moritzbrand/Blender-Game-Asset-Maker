@@ -1,3 +1,5 @@
+# Purpose: workflow step factory module.
+# Example: import workflow_step_factory
 from .models import WorkflowStep
 
 

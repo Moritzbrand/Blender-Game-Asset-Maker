@@ -1,3 +1,5 @@
+# Purpose: create game asset operator module.
+# Example: import create_game_asset_operator
 import bpy
 
 from ..scripts.progress_utils import ProgressUtils

@@ -1,3 +1,5 @@
+# Purpose: baking utils module.
+# Example: import baking_utils
 import bpy
 
 from .image_utils import ImageUtils

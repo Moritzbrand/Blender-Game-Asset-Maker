@@ -1,3 +1,5 @@
+# Purpose: progress utils module.
+# Example: import progress_utils
 import bpy
 
 

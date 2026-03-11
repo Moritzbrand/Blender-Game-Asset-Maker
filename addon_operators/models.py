@@ -1,3 +1,5 @@
+# Purpose: models module.
+# Example: import models
 from dataclasses import dataclass, field
 from typing import Any, Callable
 

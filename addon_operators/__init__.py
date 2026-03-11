@@ -1,3 +1,5 @@
+# Purpose:   init   module.
+# Example: import package
 from .create_game_asset_operator import GAMEREADY_OT_create_game_asset
 from .result_dialog import GAMEREADY_OT_result_dialog
 

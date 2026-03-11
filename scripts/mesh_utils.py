@@ -1,3 +1,5 @@
+# Purpose: mesh utils module.
+# Example: import mesh_utils
 import math
 
 import bmesh

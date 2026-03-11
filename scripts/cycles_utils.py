@@ -1,3 +1,5 @@
+# Purpose: cycles utils module.
+# Example: import cycles_utils
 import bpy
 
 

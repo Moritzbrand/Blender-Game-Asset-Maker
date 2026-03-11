@@ -1,3 +1,5 @@
+# Purpose:   init   module.
+# Example: import package
 from .baking_utils import BakingUtils
 from .image_utils import ImageUtils
 from .cycles_utils import CyclesUtils

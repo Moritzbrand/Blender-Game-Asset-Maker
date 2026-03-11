@@ -1,3 +1,5 @@
+# Purpose: object utils module.
+# Example: import object_utils
 import bpy
 
 
