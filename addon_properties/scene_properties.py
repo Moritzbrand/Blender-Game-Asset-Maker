@@ -15,6 +15,16 @@ from .property_types import (
     StringSceneProperty,
 )
 
+
+FAST_PREVIEW_SAMPLE_COUNT = 8
+FAST_PREVIEW_TEXTURE_COMPRESSION = 0
+
+
+def on_fast_low_quality_changed(scene, _context):
+    if scene.gameready_fast_low_quality:
+        scene.gameready_sample_count = FAST_PREVIEW_SAMPLE_COUNT
+        scene.gameready_texture_compression = FAST_PREVIEW_TEXTURE_COMPRESSION
+
 SCENE_PROPERTIES = [
     PathSceneProperty("gameready_output_dir", "Output Folder", "Folder where baked textures and exports will be written", default="//game_assets/", subtype='DIR_PATH'),
     BoolSceneProperty("gameready_export_files", "Export", "Export the new game asset after processing", True),
@@ -35,6 +45,7 @@ SCENE_PROPERTIES = [
     IntSceneProperty("gameready_planar_angle_limit", "Planar Angle Limit", "Maximum angle between faces to consider them planar", default=5, min=0, max=30),
     BoolSceneProperty("gameready_triangulate", "Triangulate", "Triangulate the mesh of the new game asset", True),
     BoolSceneProperty("gameready_bake_textures", "Bake Textures", "Bake textures from the original object's materials to the new game asset", True),
+    BoolSceneProperty("gameready_fast_low_quality", "Fast / Low-Quality", "Use minimum bake samples and texture compression for quick preview bakes", False, update=on_fast_low_quality_changed),
     EnumSceneProperty("gameready_texture_size", "Texture Size", "Resolution of the baked texture", items=[("256", "256", "256 x 256"), ("512", "512", "512 x 512"), ("1024", "1024", "1024 x 1024"), ("2048", "2048", "2048 x 2048"), ("4096", "4096", "4096 x 4096"), ("8192", "8192", "8192 x 8192")], default="1024"),
     IntSceneProperty("gameready_texture_compression", "Texture Compression", "PNG compression effort for all exported baked textures (0 = fastest, 100 = smallest files)", default=100, min=0, max=100, subtype='PERCENTAGE'),
     BoolSceneProperty("gameready_generate_lods", "Generate LODs", "Automatically generate Level of Detail models", False),
