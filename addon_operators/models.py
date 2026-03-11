@@ -21,6 +21,7 @@ class WorkflowStep:
 class WorkflowState:
     source_object_name: str
     selected_object_names: list[str]
+    active_object_name: str = ""
     temporary_object_name: str = ""
     game_asset_name: str = ""
     created_image_names: dict[str, str] = field(default_factory=dict)

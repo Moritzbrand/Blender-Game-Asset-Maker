@@ -105,21 +105,25 @@ class GAMEREADY_PT_settings_panel(bpy.types.Panel):
 
         mesh_box = layout.box()
         mesh_box.label(text="Mesh", icon='MESH_DATA')
-        mesh_box.prop(scene, "gameready_unsubdivide")
-        sub_unsubdivide = mesh_box.column()
-        sub_unsubdivide.enabled = scene.gameready_unsubdivide
+        mesh_box.prop(scene, "gameready_bake_selected_to_active")
+
+        mesh_options_box = mesh_box.column()
+        mesh_options_box.enabled = not scene.gameready_bake_selected_to_active
+        mesh_options_box.prop(scene, "gameready_unsubdivide")
+        sub_unsubdivide = mesh_options_box.column()
+        sub_unsubdivide.enabled = scene.gameready_unsubdivide and not scene.gameready_bake_selected_to_active
         sub_unsubdivide.prop(scene, "gameready_unsubdivide_iterations")
-        mesh_box.prop(scene, "gameready_merge_by_distance")
-        sub_merge = mesh_box.column()
-        sub_merge.enabled = scene.gameready_merge_by_distance
+        mesh_options_box.prop(scene, "gameready_merge_by_distance")
+        sub_merge = mesh_options_box.column()
+        sub_merge.enabled = scene.gameready_merge_by_distance and not scene.gameready_bake_selected_to_active
         sub_merge.prop(scene, "gameready_merge_distance")
-        mesh_box.prop(scene, "gameready_collapse")
-        sub_collapse = mesh_box.column()
-        sub_collapse.enabled = scene.gameready_collapse
+        mesh_options_box.prop(scene, "gameready_collapse")
+        sub_collapse = mesh_options_box.column()
+        sub_collapse.enabled = scene.gameready_collapse and not scene.gameready_bake_selected_to_active
         sub_collapse.prop(scene, "gameready_collapse_ratio")
-        mesh_box.prop(scene, "gameready_remove_planar_vertices")
-        sub = mesh_box.column()
-        sub.enabled = scene.gameready_remove_planar_vertices
+        mesh_options_box.prop(scene, "gameready_remove_planar_vertices")
+        sub = mesh_options_box.column()
+        sub.enabled = scene.gameready_remove_planar_vertices and not scene.gameready_bake_selected_to_active
         sub.prop(scene, "gameready_planar_angle_limit")
         mesh_box.prop(scene, "gameready_triangulate")
 
