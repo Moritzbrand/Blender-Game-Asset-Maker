@@ -1,9 +1,7 @@
-# Purpose:   init   module.
-# Example: import package
 bl_info = {
     "name": "Game Asset Maker",
     "author": "Moritz Brand",
-    "version": (0, 1),
+    "version": (1, 0),
     "blender": (5, 0, 0),
     "location": "View3D > Sidebar",
     "description": "Create game-ready assets from high-poly meshes",
