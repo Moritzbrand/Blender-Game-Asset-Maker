@@ -8,7 +8,9 @@ class UVUtils:
     SMART_PROJECT_ANGLE_LIMIT = math.radians(72.0)
     SMART_PROJECT_ISLAND_MARGIN = 0.0
     SMART_PROJECT_AREA_WEIGHT = 0.0
-    PACK_MARGIN_PIXELS = 1.0
+    DEFAULT_PACK_MARGIN_PIXELS = 1.0
+    MIN_PACK_MARGIN_PIXELS = 0.0
+    MAX_PACK_MARGIN_PIXELS = 16.0
 
     @staticmethod
     def unwrap_object(context, obj):
@@ -65,9 +67,20 @@ class UVUtils:
             return 1024
 
     @staticmethod
+    def _get_pack_margin_pixels(context):
+        configured_margin = getattr(context.scene, "gameready_uv_island_margin", UVUtils.DEFAULT_PACK_MARGIN_PIXELS)
+
+        try:
+            margin_pixels = float(configured_margin)
+        except Exception:
+            margin_pixels = UVUtils.DEFAULT_PACK_MARGIN_PIXELS
+
+        return max(UVUtils.MIN_PACK_MARGIN_PIXELS, min(UVUtils.MAX_PACK_MARGIN_PIXELS, margin_pixels))
+
+    @staticmethod
     def _get_final_pack_margin(context):
         texture_resolution = UVUtils._get_texture_resolution(context)
-        return UVUtils.PACK_MARGIN_PIXELS / float(texture_resolution)
+        return UVUtils._get_pack_margin_pixels(context) / float(texture_resolution)
 
     @staticmethod
     def _unwrap_with_smart_project(context):
