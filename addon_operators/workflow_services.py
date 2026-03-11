@@ -183,6 +183,25 @@ class GameAssetWorkflowServices:
             source_object = self.store.get_object(self.state.game_asset_name)
         MaterialUtils.make_materials_single_user(source_object)
 
+    def ensure_source_materials_for_bake(self, context):
+        source_object = self.store.get_object(self.state.temporary_object_name)
+        if source_object is None:
+            source_object = self.store.get_object(self.state.game_asset_name)
+
+        if source_object is None:
+            self.state.temporary_source_materials = []
+            return
+
+        self.state.temporary_source_materials = MaterialUtils.ensure_standard_material_on_empty_slots(source_object)
+
+    def restore_source_materials_after_bake(self, context):
+        source_object = self.store.get_object(self.state.temporary_object_name)
+        if source_object is None:
+            source_object = self.store.get_object(self.state.game_asset_name)
+
+        MaterialUtils.remove_temporary_material_assignments(source_object, self.state.temporary_source_materials)
+        self.state.temporary_source_materials = []
+
     def resolve_bake_extrusion(self, context):
         scene = context.scene
         default_extrusion = float(scene.gameready_cage_extrusion)
@@ -306,6 +325,7 @@ class GameAssetWorkflowServices:
         MaterialUtils.refresh_material_preview_on_object(game_asset, context=context)
 
     def finalize_scene(self, context):
+        self.restore_source_materials_after_bake(context)
         game_asset = self.store.get_object(self.state.game_asset_name)
         temporary_object = self.store.get_object(self.state.temporary_object_name)
         SelectionCoordinator.select_single(context, game_asset)
@@ -316,6 +336,10 @@ class GameAssetWorkflowServices:
             self.state.temporary_object_name = ""
 
     def safe_cleanup(self, context):
+        try:
+            self.restore_source_materials_after_bake(context)
+        except Exception:
+            pass
         try:
             BakingUtils.restore_render_visibility(self.state.visibility_state)
         except Exception:

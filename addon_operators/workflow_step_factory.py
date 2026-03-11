@@ -20,10 +20,11 @@ class WorkflowStepFactory:
 
         if scene.gameready_bake_textures:
             self._add(steps, "Preparing Bake Material", "Creating placeholder images and the bake material.", self.services.prepare_bake_setup, 3)
+            self._add(steps, "Preparing Source Materials", "Assigning temporary standard materials to source faces that have no material.", self.services.ensure_source_materials_for_bake, 1)
             self._add(steps, "Preparing Bake Visibility", "Hiding unrelated objects from render during baking.", self.services.prepare_bake_visibility, 1)
 
             if self._has_emit_channels(scene):
-                self._add(steps, "Preparing Source Materials", "Making source materials single-user for emit-based bakes.", self.services.make_source_materials_single_user, 1)
+                self._add(steps, "Preparing Emit Source Materials", "Making source materials single-user for emit-based bakes.", self.services.make_source_materials_single_user, 1)
 
             self._add(steps, "Resolving Cage Extrusion", "Calculating the cage extrusion distance used for bake ray casting.", self.services.resolve_bake_extrusion, 1)
 
@@ -38,6 +39,7 @@ class WorkflowStepFactory:
                 self._add(steps, "Packing ORM Texture", "Combining AO, roughness, and metallic into the ORM texture.", self.services.pack_orm, 2)
 
             self._add(steps, "Restoring Scene Visibility", "Making hidden objects visible for rendering again.", self.services.restore_visibility, 1)
+            self._add(steps, "Restoring Source Materials", "Removing temporary standard source materials created for baking.", self.services.restore_source_materials_after_bake, 1)
 
         self._add(steps, "Cleaning Up Materials", "Removing temporary and unused data blocks.", self.services.cleanup_materials, 2)
 
