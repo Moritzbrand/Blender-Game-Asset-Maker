@@ -81,6 +81,9 @@ class GAMEREADY_PT_settings_panel(bpy.types.Panel):
         material_box = layout.box()
         material_box.label(text="Material/Texture", icon='MATERIAL')
         material_box.prop(scene, "gameready_uv_unwrap")
+        uv_margin_column = material_box.column()
+        uv_margin_column.enabled = scene.gameready_uv_unwrap
+        uv_margin_column.prop(scene, "gameready_uv_island_margin", slider=True)
         material_box.prop(scene, "gameready_shade_auto_smooth")
         sub_smooth = material_box.column()
         sub_smooth.enabled = scene.gameready_shade_auto_smooth

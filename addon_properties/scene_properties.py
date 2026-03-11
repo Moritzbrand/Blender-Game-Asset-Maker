@@ -22,6 +22,7 @@ SCENE_PROPERTIES = [
     EnumSceneProperty("gameready_export_preset", "Export Preset", "Choose a Blender user preset or an addon preset for the selected export format", items=get_export_preset_enum_items),
     EnumSceneProperty("gameready_material_export_strategy", "Material Export", "Choose whether materials should be stripped or kept during export", items=MaterialExportStrategyRegistry.build_enum_items(), default="STRIP_MATERIALS"),
     BoolSceneProperty("gameready_uv_unwrap", "UV Unwrap", "Automatically create UVs for the new game asset", True),
+    IntSceneProperty("gameready_uv_island_margin", "UV Island Margin", "Final UV island margin in pixels used when packing islands", default=1, min=0, max=16),
     BoolSceneProperty("gameready_bake_selected_to_active", "Bake Selected to Active", "Use non-active selected objects as bake source and the active object as the bake target", False),
     BoolSceneProperty("gameready_apply_rot_scale", "Apply Rotation & Scale", "Apply rotation and scale before creating the game asset", True),
     BoolSceneProperty("gameready_merge_by_distance", "Merge by Distance", "Remove duplicate vertices within a certain distance to optimize the mesh for game engines", True),
