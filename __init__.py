@@ -1,23 +1,19 @@
 # Purpose:   init   module.
 # Example: import package
 bl_info = {
-    "name": "Game Asset Maker",
+    "name": "Game Ready Addon",
     "author": "Moritz Brand",
     "version": (0, 1),
     "blender": (5, 0, 0),
     "location": "View3D > Sidebar",
-    "description": "Create game-ready assets from high-poly meshes",
+    "description": "Make a model game ready",
     "category": "Object",
 }
 
 import bpy
 
 from .operators import GAMEREADY_OT_create_game_asset, GAMEREADY_OT_result_dialog
-from .panel import (
-    GAMEREADY_PT_common_settings_panel,
-    GAMEREADY_PT_main_panel,
-    GAMEREADY_PT_settings_panel,
-)
+from .panel import GAMEREADY_PT_main_panel, GAMEREADY_PT_settings_panel
 from .scripts.progress_utils import ProgressUtils
 from . import properties
 
@@ -26,7 +22,6 @@ classes = (
     GAMEREADY_OT_result_dialog,
     GAMEREADY_OT_create_game_asset,
     GAMEREADY_PT_main_panel,
-    GAMEREADY_PT_common_settings_panel,
     GAMEREADY_PT_settings_panel,
 )
 
@@ -38,7 +33,7 @@ def register():
     for cls in classes:
         bpy.utils.register_class(cls)
 
-    print("Game Asset Maker enabled")
+    print("Game Ready Addon enabled")
 
 
 def unregister():
@@ -47,7 +42,7 @@ def unregister():
 
     ProgressUtils.unregister()
     properties.unregister()
-    print("Game Asset Maker disabled")
+    print("Game Ready Addon disabled")
 
 
 if __name__ == "__main__":

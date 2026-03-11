@@ -19,22 +19,21 @@ class ScenePropertyDefinition:
 
 
 class BoolSceneProperty(ScenePropertyDefinition):
-    def __init__(self, attr_name: str, name: str, description: str, default=False, update=None, options=None):
+    def __init__(self, attr_name: str, name: str, description: str, default=False, options=None):
         super().__init__(attr_name, name, description, options=options)
         self.default = default
-        self.update = update
 
     def register(self):
-        property_kwargs = {
-            "name": self.name,
-            "description": self.description,
-            "default": self.default,
-            "options": self.options,
-        }
-        if self.update is not None:
-            property_kwargs["update"] = self.update
-
-        setattr(bpy.types.Scene, self.attr_name, bpy.props.BoolProperty(**property_kwargs))
+        setattr(
+            bpy.types.Scene,
+            self.attr_name,
+            bpy.props.BoolProperty(
+                name=self.name,
+                description=self.description,
+                default=self.default,
+                options=self.options,
+            ),
+        )
 
 
 class EnumSceneProperty(ScenePropertyDefinition):

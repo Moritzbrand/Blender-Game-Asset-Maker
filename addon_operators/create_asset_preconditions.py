@@ -23,7 +23,7 @@ class CreateAssetPreconditions:
 
     ISSUE_PROGRESS_RUNNING = PreconditionIssue(
         code="progress_running",
-        message="Another Game Asset Maker process is already running.",
+        message="Another Game Ready process is already running.",
     )
     ISSUE_SAVE_BLEND_FILE = PreconditionIssue(
         code="blend_file_not_saved",
