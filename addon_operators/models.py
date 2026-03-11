@@ -37,3 +37,4 @@ class WorkflowState:
     exported_file_paths: list[str] = field(default_factory=list)
     bake_margin: int = 1
     resolved_cage_extrusion: float = 0.0
+    temporary_source_materials: list[dict[str, str]] = field(default_factory=list)

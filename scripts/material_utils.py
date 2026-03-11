@@ -819,6 +819,75 @@ class MaterialUtils:
 
         return mat, created_images
 
+
+    @staticmethod
+    def ensure_standard_material_on_empty_slots(obj, material_name_prefix="Gameready_Standard"):
+        """Assign a temporary standard material to any empty material slots.
+
+        Returns a list of assignment records that can be passed to
+        ``remove_temporary_material_assignments``.
+        """
+        if obj is None or obj.type != 'MESH':
+            return []
+
+        assignment_records = []
+        temporary_material = None
+
+        for slot_index, material_slot in enumerate(obj.material_slots):
+            if material_slot.material is not None:
+                continue
+
+            if temporary_material is None:
+                temporary_material = bpy.data.materials.new(name=f"{material_name_prefix}_{obj.name}")
+                temporary_material.use_nodes = True
+
+            material_slot.material = temporary_material
+            assignment_records.append({
+                "slot_index": slot_index,
+                "material_name": temporary_material.name,
+            })
+
+        if not obj.material_slots and len(assignment_records) == 0:
+            if temporary_material is None:
+                temporary_material = bpy.data.materials.new(name=f"{material_name_prefix}_{obj.name}")
+                temporary_material.use_nodes = True
+            obj.data.materials.append(temporary_material)
+            assignment_records.append({
+                "slot_index": 0,
+                "material_name": temporary_material.name,
+            })
+
+        return assignment_records
+
+    @staticmethod
+    def remove_temporary_material_assignments(obj, assignment_records):
+        if obj is None or obj.type != 'MESH' or not assignment_records:
+            return 0
+
+        removed_assignments = 0
+        material_usage_delta = {}
+
+        for record in assignment_records:
+            slot_index = int(record.get("slot_index", -1))
+            material_name = record.get("material_name", "")
+
+            if slot_index < 0 or slot_index >= len(obj.material_slots):
+                continue
+
+            slot_material = obj.material_slots[slot_index].material
+            if slot_material is None or slot_material.name != material_name:
+                continue
+
+            obj.material_slots[slot_index].material = None
+            removed_assignments += 1
+            material_usage_delta[material_name] = material_usage_delta.get(material_name, 0) + 1
+
+        for material_name, _ in material_usage_delta.items():
+            material = bpy.data.materials.get(material_name)
+            if material is not None and material.users == 0:
+                bpy.data.materials.remove(material, do_unlink=True)
+
+        return removed_assignments
     @staticmethod
     def make_materials_single_user(obj):
         if obj is None or obj.type != 'MESH':
