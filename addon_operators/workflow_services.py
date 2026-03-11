@@ -79,6 +79,18 @@ class GameAssetWorkflowServices:
             return [active_object] if active_object is not None else []
         return self.store.selected_objects()
 
+    def _track_temporary_texture_coordinate_empties(self, empty_objects):
+        self.state.temporary_texture_coordinate_empty_names.extend(
+            [empty_object.name for empty_object in empty_objects if empty_object is not None]
+        )
+
+    def prepare_texture_coordinate_node_object_references(self, context, objects):
+        temporary_empties = MaterialUtils.assign_temporary_texture_coordinate_objects(
+            source_objects=objects,
+            collection=context.scene.collection,
+        )
+        self._track_temporary_texture_coordinate_empties(temporary_empties)
+
     def store_created_images(self, created_images):
         self.state.created_image_names = {
             image_key: image.name
@@ -104,6 +116,7 @@ class GameAssetWorkflowServices:
         if scene.gameready_apply_rot_scale:
             ObjectUtils.apply_transform_to_selected(context)
 
+        self.prepare_texture_coordinate_node_object_references(context, temporary_objects)
         MeshUtils.apply_modifiers_to_selected(context)
         temporary_object = MeshUtils.join_objects(context, temporary_objects)
         if temporary_object is None:
@@ -123,6 +136,7 @@ class GameAssetWorkflowServices:
         if scene.gameready_apply_rot_scale:
             ObjectUtils.apply_transform_to_selected(context)
 
+        self.prepare_texture_coordinate_node_object_references(context, new_objects)
         MeshUtils.apply_modifiers_to_selected(context)
         if self._use_selected_to_active_mode(context):
             game_asset = MeshUtils.join_objects(context, new_objects)
@@ -335,6 +349,9 @@ class GameAssetWorkflowServices:
             bpy.data.objects.remove(temporary_object, do_unlink=True)
             self.state.temporary_object_name = ""
 
+        MaterialUtils.remove_temporary_objects_by_name(self.state.temporary_texture_coordinate_empty_names)
+        self.state.temporary_texture_coordinate_empty_names = []
+
     def safe_cleanup(self, context):
         try:
             self.restore_source_materials_after_bake(context)
@@ -345,6 +362,12 @@ class GameAssetWorkflowServices:
         except Exception:
             pass
         self.state.visibility_state = {}
+        try:
+            MaterialUtils.remove_temporary_objects_by_name(self.state.temporary_texture_coordinate_empty_names)
+        except Exception:
+            pass
+        self.state.temporary_texture_coordinate_empty_names = []
+
         temporary_object = self.store.get_object(self.state.temporary_object_name)
         if temporary_object is None:
             return
