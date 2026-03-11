@@ -3,6 +3,7 @@
 import bpy
 
 from ..scripts.progress_utils import ProgressUtils
+from .create_asset_preconditions import CreateAssetPreconditions
 from .models import WorkflowState
 from .workflow_services import GameAssetWorkflowServices
 from .workflow_step_factory import WorkflowStepFactory
@@ -23,14 +24,11 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        if getattr(context.window_manager, "gameready_progress_running", False):
+        reasons = CreateAssetPreconditions.reasons(context)
+        if reasons:
+            cls.poll_message_set(reasons[0])
             return False
-        return (
-            context.active_object is not None
-            and context.mode == 'OBJECT'
-            and context.active_object.type == 'MESH'
-            and all(obj.type == 'MESH' for obj in context.selected_objects)
-        )
+        return True
 
     def execute(self, context):
         return self.invoke(context, None)
