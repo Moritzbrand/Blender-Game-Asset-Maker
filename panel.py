@@ -19,19 +19,29 @@ class GAMEREADY_PT_main_panel(bpy.types.Panel):
         action_box = layout.box()
         action_box.label(text="Create", icon='MOD_BUILD')
 
-        disable_reasons = CreateAssetPreconditions.reasons(context)
-        if disable_reasons:
+        is_running = window_manager.gameready_progress_running
+        precondition_evaluation = CreateAssetPreconditions.evaluate(context)
+        disable_reasons = precondition_evaluation.blocking_issues
+        warning_messages = precondition_evaluation.warnings
+
+        if not is_running and disable_reasons:
             reason_box = action_box.box()
             reason_box.alert = True
             reason_box.label(text="Can't create asset yet:", icon='ERROR')
-            for reason in disable_reasons:
-                reason_box.label(text=reason, icon='DOT')
+            for issue in disable_reasons:
+                reason_box.label(text=issue.message, icon='DOT')
+
+        if not is_running and warning_messages:
+            warning_box = action_box.box()
+            warning_box.label(text="Warnings:", icon='ERROR')
+            for warning in warning_messages:
+                warning_box.label(text=warning.message, icon='DOT')
 
         create_row = action_box.row()
-        create_row.enabled = not disable_reasons
+        create_row.enabled = (not is_running) and (not disable_reasons)
         create_row.operator("gameready.create_game_asset", icon='DUPLICATE')
 
-        if window_manager.gameready_progress_running:
+        if is_running:
             progress_box = layout.box()
             progress_box.label(text=window_manager.gameready_progress_title or "Processing", icon='TIME')
             progress_box.progress(
