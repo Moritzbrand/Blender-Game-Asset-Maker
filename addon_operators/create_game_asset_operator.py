@@ -41,6 +41,7 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
         self._state = WorkflowState(
             source_object_name=active_object.name,
             selected_object_names=[obj.name for obj in context.selected_objects],
+            active_object_name=active_object.name,
             bake_margin=max(1, int(scene.gameready_texture_size) // 8),
         )
         self._services = GameAssetWorkflowServices(self._state)

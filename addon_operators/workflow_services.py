@@ -59,6 +59,26 @@ class GameAssetWorkflowServices:
         self.state = state
         self.store = WorkflowContextStore(state)
 
+    def _use_selected_to_active_mode(self, context):
+        return bool(context.scene.gameready_bake_selected_to_active)
+
+    def _active_source_object(self):
+        return self.store.get_object(self.state.active_object_name)
+
+    def _source_objects_for_temp_join(self):
+        active_object = self._active_source_object()
+        return [
+            obj
+            for obj in self.store.selected_objects()
+            if obj is not None and obj != active_object
+        ]
+
+    def _objects_for_game_asset_build(self, context):
+        if self._use_selected_to_active_mode(context):
+            active_object = self._active_source_object()
+            return [active_object] if active_object is not None else []
+        return self.store.selected_objects()
+
     def store_created_images(self, created_images):
         self.state.created_image_names = {
             image_key: image.name
@@ -73,7 +93,12 @@ class GameAssetWorkflowServices:
 
     def prepare_temporary_source(self, context):
         scene = context.scene
-        ObjectUtils.select_objects(context, self.store.selected_objects())
+        source_objects = (
+            self._source_objects_for_temp_join()
+            if self._use_selected_to_active_mode(context)
+            else self.store.selected_objects()
+        )
+        ObjectUtils.select_objects(context, source_objects)
         temporary_objects = ObjectUtils.duplicate_selected(context)
 
         if scene.gameready_apply_rot_scale:
@@ -81,29 +106,38 @@ class GameAssetWorkflowServices:
 
         MeshUtils.apply_modifiers_to_selected(context)
         temporary_object = MeshUtils.join_objects(context, temporary_objects)
+        if temporary_object is None:
+            self.state.temporary_object_name = ""
+            return
         temporary_object.name = f"{self.state.source_object_name}_temp"
         self.state.temporary_object_name = temporary_object.name
 
     def build_game_asset_mesh(self, context):
         scene = context.scene
-        ObjectUtils.select_objects(context, self.store.selected_objects())
+        ObjectUtils.select_objects(context, self._objects_for_game_asset_build(context))
         new_objects = ObjectUtils.duplicate_selected(context)
 
-        if scene.gameready_unsubdivide:
+        if not self._use_selected_to_active_mode(context) and scene.gameready_unsubdivide:
             MeshUtils.add_unsubdivide_to_objects(new_objects, scene.gameready_unsubdivide_iterations * 2)
 
         if scene.gameready_apply_rot_scale:
             ObjectUtils.apply_transform_to_selected(context)
 
         MeshUtils.apply_modifiers_to_selected(context)
-        game_asset = MeshUtils.union(context, new_objects)
+        if self._use_selected_to_active_mode(context):
+            game_asset = MeshUtils.join_objects(context, new_objects)
+        else:
+            game_asset = MeshUtils.union(context, new_objects)
+        if game_asset is None:
+            raise ValueError("Could not create game asset mesh from current selection")
+
         game_asset.name = f"{self.state.source_object_name}_game"
 
-        if scene.gameready_merge_by_distance:
+        if not self._use_selected_to_active_mode(context) and scene.gameready_merge_by_distance:
             MeshUtils.merge_by_distance(context, game_asset, scene.gameready_merge_distance)
-        if scene.gameready_collapse:
+        if not self._use_selected_to_active_mode(context) and scene.gameready_collapse:
             MeshUtils.decimate_collapse(game_asset, scene.gameready_collapse_ratio)
-        if scene.gameready_remove_planar_vertices:
+        if not self._use_selected_to_active_mode(context) and scene.gameready_remove_planar_vertices:
             MeshUtils.decimate_planar(game_asset, scene.gameready_planar_angle_limit)
         if scene.gameready_triangulate:
             MeshUtils.triangulate_object(game_asset)
@@ -144,7 +178,10 @@ class GameAssetWorkflowServices:
         BakingUtils.hide_from_render(objects_to_hide)
 
     def make_source_materials_single_user(self, context):
-        MaterialUtils.make_materials_single_user(self.store.get_object(self.state.temporary_object_name))
+        source_object = self.store.get_object(self.state.temporary_object_name)
+        if source_object is None:
+            source_object = self.store.get_object(self.state.game_asset_name)
+        MaterialUtils.make_materials_single_user(source_object)
 
     def bake_normal(self, context):
         scene = context.scene
@@ -153,7 +190,7 @@ class GameAssetWorkflowServices:
         normal_image = self.store.get_created_image("normal")
         BakingUtils.bake_normal_selected_to_active(
             context=context,
-            source_obj=temporary_object,
+            source_obj=temporary_object or game_asset,
             target_obj=game_asset,
             target_image=normal_image,
             extrusion=scene.gameready_cage_extrusion,
@@ -167,7 +204,8 @@ class GameAssetWorkflowServices:
 
     def bake_emit_channel(self, context, image_key: str, material_channel: str):
         temporary_object = self.store.get_object(self.state.temporary_object_name)
-        BakingUtils.prepare_object_materials_for_emit_bake(temporary_object, material_channel)
+        source_object = temporary_object or self.store.get_object(self.state.game_asset_name)
+        BakingUtils.prepare_object_materials_for_emit_bake(source_object, material_channel)
         self._bake_selected_to_active(context, image_key, bake_mode="EMIT")
 
     def _bake_selected_to_active(self, context, image_key: str, bake_mode: str):
@@ -179,7 +217,7 @@ class GameAssetWorkflowServices:
         )
         bake_call(
             context=context,
-            source_obj=self.store.get_object(self.state.temporary_object_name),
+            source_obj=self.store.get_object(self.state.temporary_object_name) or self.store.get_object(self.state.game_asset_name),
             target_obj=self.store.get_object(self.state.game_asset_name),
             target_image=self.store.get_created_image(image_key),
             extrusion=scene.gameready_cage_extrusion,
