@@ -9,6 +9,155 @@ from .image_utils import ImageUtils
 
 class MaterialUtils:
     @staticmethod
+    def _safe_component_divide(numerator, denominator, fallback=1.0):
+        if abs(float(denominator)) <= 1e-9:
+            return float(fallback)
+        return float(numerator) / float(denominator)
+
+    @staticmethod
+    def _component_inverse_scale(pre_scale, post_scale):
+        return (
+            MaterialUtils._safe_component_divide(pre_scale[0], post_scale[0]),
+            MaterialUtils._safe_component_divide(pre_scale[1], post_scale[1]),
+            MaterialUtils._safe_component_divide(pre_scale[2], post_scale[2]),
+        )
+
+    @staticmethod
+    def _compute_object_mapping_transform(pre_location, pre_rotation, pre_scale, post_location, post_rotation, post_scale):
+        """Build mapping compensation for Object coordinates using inverse pre->post delta."""
+        return {
+            "location": (
+                float(pre_location[0]) - float(post_location[0]),
+                float(pre_location[1]) - float(post_location[1]),
+                float(pre_location[2]) - float(post_location[2]),
+            ),
+            "rotation": (
+                float(pre_rotation[0]) - float(post_rotation[0]),
+                float(pre_rotation[1]) - float(post_rotation[1]),
+                float(pre_rotation[2]) - float(post_rotation[2]),
+            ),
+            "scale": MaterialUtils._component_inverse_scale(pre_scale, post_scale),
+            "vector_type": 'POINT',
+        }
+
+    @staticmethod
+    def _compute_normal_mapping_transform(pre_rotation, pre_scale, post_rotation, post_scale):
+        """Build mapping compensation for Normal coordinates as pure direction math (no translation)."""
+        return {
+            "location": (0.0, 0.0, 0.0),
+            "rotation": (
+                float(pre_rotation[0]) - float(post_rotation[0]),
+                float(pre_rotation[1]) - float(post_rotation[1]),
+                float(pre_rotation[2]) - float(post_rotation[2]),
+            ),
+            "scale": MaterialUtils._component_inverse_scale(pre_scale, post_scale),
+            "vector_type": 'VECTOR',
+        }
+
+    @staticmethod
+    def _compute_generated_mapping_transform(
+        pre_bounds_min,
+        pre_bounds_size,
+        post_bounds_min,
+        post_bounds_size,
+        origin_shift,
+    ):
+        """Build mapping compensation for Generated coordinates from pre/post normalization bounds."""
+        scale = (
+            MaterialUtils._safe_component_divide(post_bounds_size[0], pre_bounds_size[0]),
+            MaterialUtils._safe_component_divide(post_bounds_size[1], pre_bounds_size[1]),
+            MaterialUtils._safe_component_divide(post_bounds_size[2], pre_bounds_size[2]),
+        )
+        location = (
+            MaterialUtils._safe_component_divide(
+                float(post_bounds_min[0]) + float(origin_shift[0]) - float(pre_bounds_min[0]),
+                pre_bounds_size[0],
+                fallback=0.0,
+            ),
+            MaterialUtils._safe_component_divide(
+                float(post_bounds_min[1]) + float(origin_shift[1]) - float(pre_bounds_min[1]),
+                pre_bounds_size[1],
+                fallback=0.0,
+            ),
+            MaterialUtils._safe_component_divide(
+                float(post_bounds_min[2]) + float(origin_shift[2]) - float(pre_bounds_min[2]),
+                pre_bounds_size[2],
+                fallback=0.0,
+            ),
+        )
+
+        return {
+            "location": location,
+            "rotation": (0.0, 0.0, 0.0),
+            "scale": scale,
+            "vector_type": 'POINT',
+        }
+
+    @staticmethod
+    def compute_mapping_transform_for_texcoord_output(texcoord_output_name, transform_context):
+        """Return mapping settings for a TexCoord output name.
+
+        ``transform_context`` is expected to carry keys used by each output branch:
+        - ``pre_location/pre_rotation/pre_scale``
+        - ``post_location/post_rotation/post_scale``
+        - ``pre_bounds_min/pre_bounds_size``
+        - ``post_bounds_min/post_bounds_size``
+        - ``origin_shift``
+        """
+        output_name = str(texcoord_output_name or "")
+
+        if output_name == "Normal":
+            return MaterialUtils._compute_normal_mapping_transform(
+                pre_rotation=transform_context["pre_rotation"],
+                pre_scale=transform_context["pre_scale"],
+                post_rotation=transform_context["post_rotation"],
+                post_scale=transform_context["post_scale"],
+            )
+
+        if output_name == "Object":
+            return MaterialUtils._compute_object_mapping_transform(
+                pre_location=transform_context["pre_location"],
+                pre_rotation=transform_context["pre_rotation"],
+                pre_scale=transform_context["pre_scale"],
+                post_location=transform_context["post_location"],
+                post_rotation=transform_context["post_rotation"],
+                post_scale=transform_context["post_scale"],
+            )
+
+        if output_name == "Generated":
+            return MaterialUtils._compute_generated_mapping_transform(
+                pre_bounds_min=transform_context["pre_bounds_min"],
+                pre_bounds_size=transform_context["pre_bounds_size"],
+                post_bounds_min=transform_context["post_bounds_min"],
+                post_bounds_size=transform_context["post_bounds_size"],
+                origin_shift=transform_context.get("origin_shift", (0.0, 0.0, 0.0)),
+            )
+
+        return {
+            "location": (0.0, 0.0, 0.0),
+            "rotation": (0.0, 0.0, 0.0),
+            "scale": (1.0, 1.0, 1.0),
+            "vector_type": 'POINT',
+        }
+
+    @staticmethod
+    def apply_mapping_transform_to_node(mapping_node, mapping_transform):
+        if mapping_node is None or mapping_transform is None:
+            return
+
+        if hasattr(mapping_node, "vector_type") and "vector_type" in mapping_transform:
+            mapping_node.vector_type = mapping_transform["vector_type"]
+
+        for axis_index, value in enumerate(mapping_transform.get("location", (0.0, 0.0, 0.0))):
+            mapping_node.inputs["Location"].default_value[axis_index] = float(value)
+
+        for axis_index, value in enumerate(mapping_transform.get("rotation", (0.0, 0.0, 0.0))):
+            mapping_node.inputs["Rotation"].default_value[axis_index] = float(value)
+
+        for axis_index, value in enumerate(mapping_transform.get("scale", (1.0, 1.0, 1.0))):
+            mapping_node.inputs["Scale"].default_value[axis_index] = float(value)
+
+    @staticmethod
     def _refresh_material_preview(material, context=None):
         if material is None or not material.use_nodes or material.node_tree is None:
             return
