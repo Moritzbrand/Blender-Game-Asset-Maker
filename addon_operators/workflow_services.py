@@ -181,7 +181,15 @@ class GameAssetWorkflowServices:
         source_object = self.store.get_object(self.state.temporary_object_name)
         if source_object is None:
             source_object = self.store.get_object(self.state.game_asset_name)
-        MaterialUtils.make_materials_single_user(source_object)
+
+        if source_object is None:
+            self.state.temporary_shader_material_names = []
+            self.state.temporary_shader_group_tree_names = []
+            return
+
+        created_shader_assets = MaterialUtils.make_materials_single_user(source_object)
+        self.state.temporary_shader_material_names = created_shader_assets.get("material_names", [])
+        self.state.temporary_shader_group_tree_names = created_shader_assets.get("group_tree_names", [])
 
     def ensure_source_materials_for_bake(self, context):
         source_object = self.store.get_object(self.state.temporary_object_name)
@@ -201,6 +209,15 @@ class GameAssetWorkflowServices:
 
         MaterialUtils.remove_temporary_material_assignments(source_object, self.state.temporary_source_materials)
         self.state.temporary_source_materials = []
+
+    def cleanup_temporary_shader_assets(self, context):
+        cleanup_result = MaterialUtils.cleanup_temporary_shader_datablocks(
+            material_names=self.state.temporary_shader_material_names,
+            group_tree_names=self.state.temporary_shader_group_tree_names,
+        )
+        self.state.temporary_shader_material_names = []
+        self.state.temporary_shader_group_tree_names = []
+        return cleanup_result
 
     def resolve_bake_extrusion(self, context):
         scene = context.scene
@@ -326,6 +343,7 @@ class GameAssetWorkflowServices:
 
     def finalize_scene(self, context):
         self.restore_source_materials_after_bake(context)
+        self.cleanup_temporary_shader_assets(context)
         game_asset = self.store.get_object(self.state.game_asset_name)
         temporary_object = self.store.get_object(self.state.temporary_object_name)
         SelectionCoordinator.select_single(context, game_asset)
@@ -338,6 +356,10 @@ class GameAssetWorkflowServices:
     def safe_cleanup(self, context):
         try:
             self.restore_source_materials_after_bake(context)
+        except Exception:
+            pass
+        try:
+            self.cleanup_temporary_shader_assets(context)
         except Exception:
             pass
         try:

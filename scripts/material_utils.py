@@ -888,20 +888,79 @@ class MaterialUtils:
                 bpy.data.materials.remove(material, do_unlink=True)
 
         return removed_assignments
+
     @staticmethod
     def make_materials_single_user(obj):
         if obj is None or obj.type != 'MESH':
             raise ValueError("Object must be a mesh")
 
         copied = {}
+        created_material_names = []
+        created_group_tree_names = []
 
         for slot in obj.material_slots:
-            mat = slot.material
-            if mat is None:
+            material = slot.material
+            if material is None:
                 continue
 
-            key = mat.name_full
-            if key not in copied:
-                copied[key] = mat.copy()
+            material_key = material.name_full
+            if material_key not in copied:
+                copied_material = material.copy()
+                copied[material_key] = copied_material
+                created_material_names.append(copied_material.name)
+            else:
+                copied_material = copied[material_key]
 
-            slot.material = copied[key]
+            slot.material = copied_material
+            _, duplicated_group_tree_names = MaterialUtils.duplicate_shared_group_nodes(copied_material)
+            created_group_tree_names.extend(duplicated_group_tree_names)
+
+        return {
+            "material_names": created_material_names,
+            "group_tree_names": created_group_tree_names,
+        }
+
+    @staticmethod
+    def duplicate_shared_group_nodes(material):
+        if material is None or not material.use_nodes or material.node_tree is None:
+            return material, []
+
+        duplicated_group_tree_names = []
+
+        for node in material.node_tree.nodes:
+            if node.bl_idname != "ShaderNodeGroup":
+                continue
+
+            node_tree = node.node_tree
+            if node_tree is None or node_tree.users <= 1:
+                continue
+
+            duplicated_tree = node_tree.copy()
+            node.node_tree = duplicated_tree
+            duplicated_group_tree_names.append(duplicated_tree.name)
+
+        return material, duplicated_group_tree_names
+
+    @staticmethod
+    def cleanup_temporary_shader_datablocks(material_names=None, group_tree_names=None):
+        removed_material_count = 0
+        removed_group_tree_count = 0
+
+        for group_tree_name in group_tree_names or []:
+            group_tree = bpy.data.node_groups.get(group_tree_name)
+            if group_tree is None or group_tree.users != 0:
+                continue
+            bpy.data.node_groups.remove(group_tree, do_unlink=True)
+            removed_group_tree_count += 1
+
+        for material_name in material_names or []:
+            material = bpy.data.materials.get(material_name)
+            if material is None or material.users != 0:
+                continue
+            bpy.data.materials.remove(material, do_unlink=True)
+            removed_material_count += 1
+
+        return {
+            "removed_materials": removed_material_count,
+            "removed_group_trees": removed_group_tree_count,
+        }
