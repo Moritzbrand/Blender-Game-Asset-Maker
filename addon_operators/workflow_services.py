@@ -79,6 +79,42 @@ class GameAssetWorkflowServices:
             return [active_object] if active_object is not None else []
         return self.store.selected_objects()
 
+    def _temporary_source_objects(self):
+        temporary_objects = [
+            obj
+            for obj in (
+                self.store.get_object(object_name)
+                for object_name in self.state.temporary_source_object_names
+            )
+            if obj is not None
+        ]
+        if temporary_objects:
+            return temporary_objects
+
+        temporary_object = self.store.get_object(self.state.temporary_object_name)
+        if temporary_object is not None:
+            return [temporary_object]
+
+        game_asset = self.store.get_object(self.state.game_asset_name)
+        return [game_asset] if game_asset is not None else []
+
+    def _remove_temporary_source_objects(self):
+        object_names = list(dict.fromkeys(self.state.temporary_source_object_names))
+        if self.state.temporary_object_name:
+            object_names.append(self.state.temporary_object_name)
+
+        for object_name in object_names:
+            temporary_object = self.store.get_object(object_name)
+            if temporary_object is None:
+                continue
+            try:
+                bpy.data.objects.remove(temporary_object, do_unlink=True)
+            except Exception:
+                pass
+
+        self.state.temporary_object_name = ""
+        self.state.temporary_source_object_names = []
+
     def store_created_images(self, created_images):
         self.state.created_image_names = {
             image_key: image.name
@@ -105,12 +141,22 @@ class GameAssetWorkflowServices:
             ObjectUtils.apply_transform_to_selected(context)
 
         MeshUtils.apply_modifiers_to_selected(context)
+
+        self.state.temporary_object_name = ""
+        self.state.temporary_source_object_names = []
+
+        if self._use_selected_to_active_mode(context):
+            for index, temporary_object in enumerate(temporary_objects, start=1):
+                temporary_object.name = f"{self.state.source_object_name}_temp_{index:03d}"
+                self.state.temporary_source_object_names.append(temporary_object.name)
+            return
+
         temporary_object = MeshUtils.join_objects(context, temporary_objects)
         if temporary_object is None:
-            self.state.temporary_object_name = ""
             return
         temporary_object.name = f"{self.state.source_object_name}_temp"
         self.state.temporary_object_name = temporary_object.name
+        self.state.temporary_source_object_names = [temporary_object.name]
 
     def build_game_asset_mesh(self, context):
         scene = context.scene
@@ -167,39 +213,55 @@ class GameAssetWorkflowServices:
         self.store_created_images(created_images)
 
     def prepare_bake_visibility(self, context):
-        temporary_object = self.store.get_object(self.state.temporary_object_name)
+        source_objects = self._temporary_source_objects()
         game_asset = self.store.get_object(self.state.game_asset_name)
+        visible_bake_objects = set(source_objects)
+        if game_asset is not None:
+            visible_bake_objects.add(game_asset)
+
         objects_to_hide = [
             obj
             for obj in BakingUtils.get_all_rendered_objects(context)
-            if obj not in {temporary_object, game_asset}
+            if obj not in visible_bake_objects
         ]
         self.state.visibility_state = BakingUtils.store_render_visibility(objects_to_hide)
         BakingUtils.hide_from_render(objects_to_hide)
 
     def make_source_materials_single_user(self, context):
-        source_object = self.store.get_object(self.state.temporary_object_name)
-        if source_object is None:
-            source_object = self.store.get_object(self.state.game_asset_name)
-        MaterialUtils.make_materials_single_user(source_object)
+        for source_object in self._temporary_source_objects():
+            MaterialUtils.make_materials_single_user(source_object)
 
     def ensure_source_materials_for_bake(self, context):
-        source_object = self.store.get_object(self.state.temporary_object_name)
-        if source_object is None:
-            source_object = self.store.get_object(self.state.game_asset_name)
-
-        if source_object is None:
+        source_objects = self._temporary_source_objects()
+        if not source_objects:
             self.state.temporary_source_materials = []
             return
 
-        self.state.temporary_source_materials = MaterialUtils.ensure_standard_material_on_empty_slots(source_object)
+        assignment_records = []
+        for source_object in source_objects:
+            for assignment_record in MaterialUtils.ensure_standard_material_on_empty_slots(source_object):
+                assignment_records.append({
+                    "object_name": source_object.name,
+                    "slot_index": assignment_record["slot_index"],
+                    "material_name": assignment_record["material_name"],
+                })
+
+        self.state.temporary_source_materials = assignment_records
 
     def restore_source_materials_after_bake(self, context):
-        source_object = self.store.get_object(self.state.temporary_object_name)
-        if source_object is None:
-            source_object = self.store.get_object(self.state.game_asset_name)
+        assignment_records_by_object_name = {}
+        for assignment_record in self.state.temporary_source_materials:
+            object_name = assignment_record.get("object_name", "")
+            if not object_name:
+                continue
+            assignment_records_by_object_name.setdefault(object_name, []).append(assignment_record)
 
-        MaterialUtils.remove_temporary_material_assignments(source_object, self.state.temporary_source_materials)
+        for object_name, assignment_records in assignment_records_by_object_name.items():
+            source_object = self.store.get_object(object_name)
+            if source_object is None:
+                continue
+            MaterialUtils.remove_temporary_material_assignments(source_object, assignment_records)
+
         self.state.temporary_source_materials = []
 
     def resolve_bake_extrusion(self, context):
@@ -210,7 +272,8 @@ class GameAssetWorkflowServices:
             self.state.resolved_cage_extrusion = default_extrusion
             return
 
-        source_object = self.store.get_object(self.state.temporary_object_name) or self.store.get_object(self.state.game_asset_name)
+        source_objects = self._temporary_source_objects()
+        source_object = source_objects[0] if source_objects else None
         target_object = self.store.get_object(self.state.game_asset_name)
 
         self.state.resolved_cage_extrusion = BakingUtils.calculate_auto_cage_extrusion(
@@ -228,12 +291,12 @@ class GameAssetWorkflowServices:
 
     def bake_normal(self, context):
         scene = context.scene
-        temporary_object = self.store.get_object(self.state.temporary_object_name)
+        source_objects = self._temporary_source_objects()
         game_asset = self.store.get_object(self.state.game_asset_name)
         normal_image = self.store.get_created_image("normal")
         BakingUtils.bake_normal_selected_to_active(
             context=context,
-            source_obj=temporary_object or game_asset,
+            source_objects=source_objects,
             target_obj=game_asset,
             target_image=normal_image,
             extrusion=self._resolved_cage_extrusion(context),
@@ -246,9 +309,8 @@ class GameAssetWorkflowServices:
         self._bake_selected_to_active(context, "ao", bake_mode="AO")
 
     def bake_emit_channel(self, context, image_key: str, material_channel: str):
-        temporary_object = self.store.get_object(self.state.temporary_object_name)
-        source_object = temporary_object or self.store.get_object(self.state.game_asset_name)
-        BakingUtils.prepare_object_materials_for_emit_bake(source_object, material_channel)
+        for source_object in self._temporary_source_objects():
+            BakingUtils.prepare_object_materials_for_emit_bake(source_object, material_channel)
         self._bake_selected_to_active(context, image_key, bake_mode="EMIT")
 
     def _bake_selected_to_active(self, context, image_key: str, bake_mode: str):
@@ -259,7 +321,7 @@ class GameAssetWorkflowServices:
         )
         bake_call(
             context=context,
-            source_obj=self.store.get_object(self.state.temporary_object_name) or self.store.get_object(self.state.game_asset_name),
+            source_objects=self._temporary_source_objects(),
             target_obj=self.store.get_object(self.state.game_asset_name),
             target_image=self.store.get_created_image(image_key),
             extrusion=self._resolved_cage_extrusion(context),
@@ -327,13 +389,10 @@ class GameAssetWorkflowServices:
     def finalize_scene(self, context):
         self.restore_source_materials_after_bake(context)
         game_asset = self.store.get_object(self.state.game_asset_name)
-        temporary_object = self.store.get_object(self.state.temporary_object_name)
         SelectionCoordinator.select_single(context, game_asset)
         if game_asset is not None:
             MaterialUtils.refresh_material_preview_on_object(game_asset, context=context)
-        if temporary_object is not None:
-            bpy.data.objects.remove(temporary_object, do_unlink=True)
-            self.state.temporary_object_name = ""
+        self._remove_temporary_source_objects()
 
     def safe_cleanup(self, context):
         try:
@@ -345,11 +404,4 @@ class GameAssetWorkflowServices:
         except Exception:
             pass
         self.state.visibility_state = {}
-        temporary_object = self.store.get_object(self.state.temporary_object_name)
-        if temporary_object is None:
-            return
-        try:
-            bpy.data.objects.remove(temporary_object, do_unlink=True)
-        except Exception:
-            pass
-        self.state.temporary_object_name = ""
+        self._remove_temporary_source_objects()
