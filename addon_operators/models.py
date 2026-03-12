@@ -23,7 +23,6 @@ class WorkflowState:
     selected_object_names: list[str]
     active_object_name: str = ""
     temporary_object_name: str = ""
-    temporary_source_object_names: list[str] = field(default_factory=list)
     game_asset_name: str = ""
     created_image_names: dict[str, str] = field(default_factory=dict)
     created_image_filepaths: dict[str, str] = field(default_factory=dict)
@@ -38,4 +37,4 @@ class WorkflowState:
     exported_file_paths: list[str] = field(default_factory=list)
     bake_margin: int = 1
     resolved_cage_extrusion: float = 0.0
-    temporary_source_materials: list[dict[str, str | int]] = field(default_factory=list)
+    temporary_source_materials: list[dict[str, str]] = field(default_factory=list)

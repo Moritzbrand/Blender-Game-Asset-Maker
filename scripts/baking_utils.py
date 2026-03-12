@@ -168,7 +168,7 @@ class BakingUtils:
     def bake_normal_selected_to_active(
         cls,
         context,
-        source_objects,
+        source_obj,
         target_obj,
         target_image,
         extrusion,
@@ -176,7 +176,7 @@ class BakingUtils:
     ):
         cls._bake_selected_to_active_image(
             context=context,
-            source_objects=source_objects,
+            source_object=source_obj,
             target_object=target_obj,
             target_image=target_image,
             bake_type='NORMAL',
@@ -189,7 +189,7 @@ class BakingUtils:
     def bake_ao_selected_to_active(
         cls,
         context,
-        source_objects,
+        source_obj,
         target_obj,
         target_image,
         extrusion,
@@ -197,7 +197,7 @@ class BakingUtils:
     ):
         cls._bake_selected_to_active_image(
             context=context,
-            source_objects=source_objects,
+            source_object=source_obj,
             target_object=target_obj,
             target_image=target_image,
             bake_type='AO',
@@ -210,7 +210,7 @@ class BakingUtils:
     def bake_emit_selected_to_active(
         cls,
         context,
-        source_objects,
+        source_obj,
         target_obj,
         target_image,
         extrusion,
@@ -218,7 +218,7 @@ class BakingUtils:
     ):
         cls._bake_selected_to_active_image(
             context=context,
-            source_objects=source_objects,
+            source_object=source_obj,
             target_object=target_obj,
             target_image=target_image,
             bake_type='EMIT',
@@ -231,7 +231,7 @@ class BakingUtils:
     def _bake_selected_to_active_image(
         cls,
         context,
-        source_objects,
+        source_object,
         target_object,
         target_image,
         bake_type,
@@ -239,14 +239,14 @@ class BakingUtils:
         margin,
         use_tangent_normal_space,
     ):
-        normalized_source_objects = cls._require_mesh_objects(source_objects, "source_objects")
+        cls._require_mesh_object(source_object, "source_object")
         cls._require_mesh_object(target_object, "target_object")
         cls._require_image(target_image, "target_image")
 
         cls._ensure_object_mode(context)
         cls._prepare_selected_to_active_bake_selection(
             context=context,
-            source_objects=normalized_source_objects,
+            source_object=source_object,
             target_object=target_object,
         )
 
@@ -288,14 +288,13 @@ class BakingUtils:
     def _prepare_selected_to_active_bake_selection(
         cls,
         context,
-        source_objects,
+        source_object,
         target_object,
     ):
         for selected_object in list(context.selected_objects):
             selected_object.select_set(False)
 
-        for source_object in source_objects:
-            source_object.select_set(True)
+        source_object.select_set(True)
         target_object.select_set(True)
         context.view_layer.objects.active = target_object
 
@@ -331,20 +330,6 @@ class BakingUtils:
             raise ValueError(f"{argument_name} is required")
         if scene_object.type != 'MESH':
             raise ValueError(f"{argument_name} must be a mesh object")
-
-    @classmethod
-    def _require_mesh_objects(cls, scene_objects, argument_name):
-        if scene_objects is None:
-            raise ValueError(f"{argument_name} is required")
-
-        normalized_objects = list(scene_objects)
-        if not normalized_objects:
-            raise ValueError(f"{argument_name} must contain at least one mesh object")
-
-        for object_index, scene_object in enumerate(normalized_objects):
-            cls._require_mesh_object(scene_object, f"{argument_name}[{object_index}]")
-
-        return normalized_objects
 
     @classmethod
     def _require_image(cls, image, argument_name):
