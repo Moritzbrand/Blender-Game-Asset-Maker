@@ -8,6 +8,17 @@ from .image_utils import ImageUtils
 
 
 class MaterialUtils:
+    EMIT_CHANNEL_TO_PRINCIPLED_INPUT_NAMES = {
+        "BASE_COLOR": ("Base Color",),
+        "ALPHA": ("Alpha",),
+        "ROUGHNESS": ("Roughness",),
+        "METALLIC": ("Metallic",),
+        "EMISSION": ("Emission Color", "Emission"),
+        "SSS": ("Subsurface Weight", "Subsurface", "Subsurface Radius"),
+    }
+
+    RISKY_TEXCOORD_OUTPUT_NAMES = {"Normal", "Generated", "Object"}
+
     @staticmethod
     def _refresh_material_preview(material, context=None):
         if material is None or not material.use_nodes or material.node_tree is None:
@@ -905,3 +916,245 @@ class MaterialUtils:
                 copied[key] = mat.copy()
 
             slot.material = copied[key]
+
+    @staticmethod
+    def get_enabled_emit_bake_channels(scene):
+        channels = []
+        if scene.gameready_bake_base_color:
+            channels.append("BASE_COLOR")
+        if scene.gameready_bake_alpha:
+            channels.append("ALPHA")
+        if scene.gameready_bake_roughness:
+            channels.append("ROUGHNESS")
+        if scene.gameready_bake_metallic:
+            channels.append("METALLIC")
+        if scene.gameready_bake_emission:
+            channels.append("EMISSION")
+        if scene.gameready_bake_sss:
+            channels.append("SSS")
+        return channels
+
+    @staticmethod
+    def make_materials_single_user_for_bake_channels(obj, bake_object, bake_channels):
+        replacement_map = MaterialUtils.build_material_replacement_map_for_bake_channels(
+            obj=obj,
+            bake_object=bake_object,
+            bake_channels=bake_channels,
+        )
+
+        for slot_index, replacement_material in replacement_map.items():
+            if slot_index < 0 or slot_index >= len(obj.material_slots):
+                continue
+            obj.material_slots[slot_index].material = replacement_material
+
+        return replacement_map
+
+    @staticmethod
+    def build_material_replacement_map_for_bake_channels(obj, bake_object, bake_channels):
+        if obj is None or obj.type != 'MESH':
+            raise ValueError("Object must be a mesh")
+
+        normalized_bake_channels = {
+            str(channel).upper()
+            for channel in bake_channels or []
+            if str(channel).upper() in MaterialUtils.EMIT_CHANNEL_TO_PRINCIPLED_INPUT_NAMES
+        }
+        if not normalized_bake_channels:
+            return {}
+
+        copied_materials = {}
+        replacement_map = {}
+        material_is_affected = {}
+
+        for slot in obj.material_slots:
+            material = slot.material
+            if material is None:
+                continue
+
+            material_key = material.name_full
+            if material_key not in material_is_affected:
+                material_is_affected[material_key] = MaterialUtils._material_uses_risky_texcoord_for_bake_channels(
+                    material=material,
+                    bake_channels=normalized_bake_channels,
+                    bake_object=bake_object,
+                )
+
+            if not material_is_affected[material_key]:
+                continue
+
+            if material_key not in copied_materials:
+                copied_materials[material_key] = material.copy()
+
+            replacement_map[slot.slot_index] = copied_materials[material_key]
+
+        return replacement_map
+
+    @staticmethod
+    def _material_uses_risky_texcoord_for_bake_channels(material, bake_channels, bake_object):
+        if material is None or not material.use_nodes or material.node_tree is None:
+            return False
+
+        principled_node = None
+        for node in material.node_tree.nodes:
+            if node.bl_idname == "ShaderNodeBsdfPrincipled":
+                principled_node = node
+                break
+
+        if principled_node is None:
+            return False
+
+        for channel in bake_channels:
+            for input_name in MaterialUtils.EMIT_CHANNEL_TO_PRINCIPLED_INPUT_NAMES.get(channel, ()):
+                input_socket = principled_node.inputs.get(input_name)
+                if input_socket is None or not input_socket.is_linked:
+                    continue
+
+                if MaterialUtils._socket_has_risky_texcoord_source(
+                    node_tree=material.node_tree,
+                    socket=input_socket,
+                    bake_object=bake_object,
+                    group_stack=(),
+                    visited=set(),
+                ):
+                    return True
+
+        return False
+
+    @staticmethod
+    def _socket_has_risky_texcoord_source(node_tree, socket, bake_object, group_stack, visited):
+        if node_tree is None or socket is None:
+            return False
+
+        visit_key = (
+            node_tree.as_pointer(),
+            socket.node.as_pointer() if socket.node is not None else 0,
+            socket.identifier if hasattr(socket, "identifier") else socket.name,
+            tuple(group_node.as_pointer() for _, group_node in group_stack),
+        )
+        if visit_key in visited:
+            return False
+        visited.add(visit_key)
+
+        for link in socket.links:
+            source_socket = link.from_socket
+            source_node = link.from_node
+            if source_socket is None or source_node is None:
+                continue
+
+            if source_node.bl_idname == "ShaderNodeTexCoord":
+                if MaterialUtils._is_risky_texcoord_output(source_node, source_socket, bake_object):
+                    return True
+                continue
+
+            if source_node.bl_idname == "NodeGroupInput":
+                if not group_stack:
+                    continue
+                parent_tree, parent_group_node = group_stack[-1]
+                parent_input_socket = MaterialUtils._find_socket_by_identifier_or_index(
+                    parent_group_node.inputs,
+                    source_socket,
+                )
+                if parent_input_socket is None:
+                    continue
+                if MaterialUtils._socket_has_risky_texcoord_source(
+                    node_tree=parent_tree,
+                    socket=parent_input_socket,
+                    bake_object=bake_object,
+                    group_stack=group_stack[:-1],
+                    visited=visited,
+                ):
+                    return True
+                continue
+
+            if source_node.bl_idname == "ShaderNodeGroup" and source_node.node_tree is not None:
+                internal_output_input = MaterialUtils._group_output_input_sockets_for_group_output(
+                    source_node,
+                    source_socket,
+                )
+                for internal_socket in internal_output_input:
+                    if MaterialUtils._socket_has_risky_texcoord_source(
+                        node_tree=source_node.node_tree,
+                        socket=internal_socket,
+                        bake_object=bake_object,
+                        group_stack=group_stack + ((node_tree, source_node),),
+                        visited=visited,
+                    ):
+                        return True
+                continue
+
+            for input_socket in source_node.inputs:
+                if not input_socket.is_linked:
+                    continue
+                if MaterialUtils._socket_has_risky_texcoord_source(
+                    node_tree=node_tree,
+                    socket=input_socket,
+                    bake_object=bake_object,
+                    group_stack=group_stack,
+                    visited=visited,
+                ):
+                    return True
+
+        return False
+
+    @staticmethod
+    def _group_output_input_sockets_for_group_output(group_node, group_output_socket):
+        group_tree = group_node.node_tree
+        if group_tree is None:
+            return []
+
+        internal_sockets = []
+        candidate_output_nodes = [
+            node
+            for node in group_tree.nodes
+            if node.bl_idname == "NodeGroupOutput"
+        ]
+
+        active_output_nodes = [
+            node
+            for node in candidate_output_nodes
+            if getattr(node, "is_active_output", False)
+        ]
+        if active_output_nodes:
+            candidate_output_nodes = active_output_nodes
+
+        for output_node in candidate_output_nodes:
+            matching_socket = MaterialUtils._find_socket_by_identifier_or_index(
+                output_node.inputs,
+                group_output_socket,
+            )
+            if matching_socket is not None:
+                internal_sockets.append(matching_socket)
+
+        return internal_sockets
+
+    @staticmethod
+    def _find_socket_by_identifier_or_index(sockets, reference_socket):
+        reference_identifier = getattr(reference_socket, "identifier", None)
+        if reference_identifier:
+            for socket in sockets:
+                if getattr(socket, "identifier", None) == reference_identifier:
+                    return socket
+
+        reference_index = getattr(reference_socket, "index", -1)
+        if 0 <= reference_index < len(sockets):
+            return sockets[reference_index]
+
+        reference_name = getattr(reference_socket, "name", "")
+        if reference_name:
+            for socket in sockets:
+                if socket.name == reference_name:
+                    return socket
+
+        return None
+
+    @staticmethod
+    def _is_risky_texcoord_output(texcoord_node, output_socket, bake_object):
+        output_name = output_socket.name
+        if output_name not in MaterialUtils.RISKY_TEXCOORD_OUTPUT_NAMES:
+            return False
+
+        if output_name != "Object":
+            return True
+
+        object_reference = getattr(texcoord_node, "object", None)
+        return object_reference is None or object_reference == bake_object
