@@ -7,6 +7,11 @@ import bpy
 from .image_utils import ImageUtils
 
 
+class BakeCoordinatePreparationResult:
+    def __init__(self, helper_object_names=None):
+        self.helper_object_names = helper_object_names or []
+
+
 class MaterialUtils:
     @staticmethod
     def _refresh_material_preview(material, context=None):
@@ -905,3 +910,168 @@ class MaterialUtils:
                 copied[key] = mat.copy()
 
             slot.material = copied[key]
+
+
+    @staticmethod
+    def _is_texture_coordinate_node(node):
+        return node is not None and node.bl_idname == "ShaderNodeTexCoord"
+
+    @staticmethod
+    def _iter_texcoord_links_by_output(node_tree):
+        if node_tree is None:
+            return
+        for node in node_tree.nodes:
+            if not MaterialUtils._is_texture_coordinate_node(node):
+                continue
+
+            normal_output = node.outputs.get("Normal")
+            if normal_output is not None:
+                for link in list(normal_output.links):
+                    yield node, "Normal", link
+
+            object_output = node.outputs.get("Object")
+            if object_output is not None:
+                for link in list(object_output.links):
+                    yield node, "Object", link
+
+    @staticmethod
+    def _texcoord_uses_local_reference(texcoord_node, source_object, original_object):
+        referenced_object = getattr(texcoord_node, "object", None)
+        return (
+            referenced_object is None
+            or referenced_object == source_object
+            or referenced_object == original_object
+        )
+
+    @staticmethod
+    def _material_requires_bake_coordinate_handling(material, source_object, original_object):
+        if material is None or not material.use_nodes or material.node_tree is None:
+            return False
+
+        for texcoord_node, output_name, _ in MaterialUtils._iter_texcoord_links_by_output(material.node_tree):
+            if output_name not in {"Normal", "Object"}:
+                continue
+            if not MaterialUtils._texcoord_uses_local_reference(texcoord_node, source_object, original_object):
+                continue
+            return True
+
+        return False
+
+    @staticmethod
+    def _make_coordinate_sensitive_materials_single_user(source_object, original_object):
+        copied_materials = {}
+
+        for material_slot in source_object.material_slots:
+            material = material_slot.material
+            if material is None:
+                continue
+
+            if not MaterialUtils._material_requires_bake_coordinate_handling(material, source_object, original_object):
+                continue
+
+            material_key = material.name_full
+            if material_key not in copied_materials:
+                copied_materials[material_key] = material.copy()
+
+            material_slot.material = copied_materials[material_key]
+
+    @staticmethod
+    def _insert_mapping_node_for_link(node_tree, texcoord_node, link, source_object):
+        mapping_node = node_tree.nodes.new("ShaderNodeMapping")
+        mapping_node.name = "GR_BakeCoordCompensation_Mapping"
+        mapping_node.label = "GR Bake Coord Compensation"
+        mapping_node.vector_type = 'POINT'
+
+        source_socket = texcoord_node.outputs.get("Normal")
+        mapping_input = mapping_node.inputs.get("Vector")
+        mapping_output = mapping_node.outputs.get("Vector")
+
+        if source_socket is None or mapping_input is None or mapping_output is None:
+            node_tree.nodes.remove(mapping_node)
+            return False
+
+        target_socket = link.to_socket
+        mapping_node.location = (
+            (texcoord_node.location.x + link.to_node.location.x) * 0.5,
+            (texcoord_node.location.y + link.to_node.location.y) * 0.5,
+        )
+
+        node_tree.links.remove(link)
+        node_tree.links.new(source_socket, mapping_input)
+        node_tree.links.new(mapping_output, target_socket)
+
+        rotation_input = mapping_node.inputs.get("Rotation")
+        if rotation_input is not None:
+            rotation_input.default_value[0] = -source_object.rotation_euler.x
+            rotation_input.default_value[1] = -source_object.rotation_euler.y
+            rotation_input.default_value[2] = -source_object.rotation_euler.z
+
+        return True
+
+    @staticmethod
+    def _ensure_coordinate_helper_empty(context, source_object, helper_object):
+        if helper_object is not None:
+            return helper_object
+
+        helper_object = bpy.data.objects.new(
+            name=f"{source_object.name}_GR_BakeCoord",
+            object_data=None,
+        )
+        target_collection = context.collection or context.scene.collection
+        target_collection.objects.link(helper_object)
+        helper_object.matrix_world = source_object.matrix_world.copy()
+        helper_object.empty_display_type = 'PLAIN_AXES'
+        helper_object.empty_display_size = 0.2
+        helper_object.hide_render = True
+        helper_object.hide_set(True)
+        return helper_object
+
+    @staticmethod
+    def prepare_bake_coordinate_nodes_for_source_object(context, source_object, original_object=None):
+        if source_object is None or source_object.type != 'MESH':
+            return BakeCoordinatePreparationResult()
+
+        original_object = original_object or source_object
+        MaterialUtils._make_coordinate_sensitive_materials_single_user(source_object, original_object)
+
+        helper_object = None
+        helper_object_names = []
+        seen_materials = set()
+
+        for material_slot in source_object.material_slots:
+            material = material_slot.material
+            if material is None or not material.use_nodes or material.node_tree is None:
+                continue
+
+            material_key = material.as_pointer()
+            if material_key in seen_materials:
+                continue
+            seen_materials.add(material_key)
+
+            node_tree = material.node_tree
+            texcoord_links = list(MaterialUtils._iter_texcoord_links_by_output(node_tree))
+            for texcoord_node, output_name, link in texcoord_links:
+                if not MaterialUtils._texcoord_uses_local_reference(texcoord_node, source_object, original_object):
+                    continue
+
+                if output_name == "Normal":
+                    MaterialUtils._insert_mapping_node_for_link(
+                        node_tree=node_tree,
+                        texcoord_node=texcoord_node,
+                        link=link,
+                        source_object=source_object,
+                    )
+                    continue
+
+                if output_name == "Object":
+                    helper_object = MaterialUtils._ensure_coordinate_helper_empty(
+                        context=context,
+                        source_object=source_object,
+                        helper_object=helper_object,
+                    )
+                    texcoord_node.object = helper_object
+
+        if helper_object is not None:
+            helper_object_names.append(helper_object.name)
+
+        return BakeCoordinatePreparationResult(helper_object_names=helper_object_names)
