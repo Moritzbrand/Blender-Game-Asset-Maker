@@ -9,106 +9,6 @@ from .image_utils import ImageUtils
 
 class MaterialUtils:
     @staticmethod
-    def _iter_texture_coordinate_nodes(material):
-        if material is None or not material.use_nodes or material.node_tree is None:
-            return []
-
-        return [
-            node
-            for node in material.node_tree.nodes
-            if getattr(node, "bl_idname", "") == "ShaderNodeTexCoord"
-        ]
-
-    @staticmethod
-    def _texture_coordinate_node_uses_only_object_output(node):
-        object_output_socket = node.outputs.get("Object") if node is not None else None
-        if object_output_socket is None or not object_output_socket.is_linked:
-            return False
-
-        for output_socket in node.outputs:
-            if output_socket == object_output_socket:
-                continue
-            if output_socket.is_linked:
-                return False
-        return True
-
-    @staticmethod
-    def _texture_coordinate_node_needs_anchor(node, owner_object):
-        target_object = getattr(node, "object", None)
-        if target_object is None:
-            return True
-        if owner_object is not None and target_object == owner_object:
-            return True
-        return getattr(target_object, "type", "") == 'EMPTY'
-
-    @staticmethod
-    def _create_texture_coordinate_anchor_empty(owner_object, name_prefix="GR_TexCoordAnchor"):
-        if owner_object is None:
-            return None
-
-        anchor_object = bpy.data.objects.new(name=f"{name_prefix}_{owner_object.name}", object_data=None)
-        anchor_object.empty_display_type = 'PLAIN_AXES'
-        anchor_object.matrix_world = owner_object.matrix_world.copy()
-
-        target_collection = owner_object.users_collection[0] if owner_object.users_collection else bpy.context.scene.collection
-        target_collection.objects.link(anchor_object)
-        return anchor_object
-
-    @staticmethod
-    def prepare_texture_coordinate_anchors_for_objects(objects):
-        created_anchor_names = []
-
-        for obj in objects:
-            if obj is None or obj.type != 'MESH':
-                continue
-
-            MaterialUtils.make_materials_single_user(obj)
-
-            anchor_object = None
-            seen_materials = set()
-
-            for material_slot in obj.material_slots:
-                material = material_slot.material
-                if material is None:
-                    continue
-
-                material_pointer = material.as_pointer()
-                if material_pointer in seen_materials:
-                    continue
-                seen_materials.add(material_pointer)
-
-                nodes_requiring_anchor = [
-                    node
-                    for node in MaterialUtils._iter_texture_coordinate_nodes(material)
-                    if MaterialUtils._texture_coordinate_node_uses_only_object_output(node)
-                    and MaterialUtils._texture_coordinate_node_needs_anchor(node, obj)
-                ]
-
-                if not nodes_requiring_anchor:
-                    continue
-
-                if anchor_object is None:
-                    anchor_object = MaterialUtils._create_texture_coordinate_anchor_empty(obj)
-                    if anchor_object is not None:
-                        created_anchor_names.append(anchor_object.name)
-
-                if anchor_object is None:
-                    continue
-
-                for node in nodes_requiring_anchor:
-                    node.object = anchor_object
-
-        return created_anchor_names
-
-    @staticmethod
-    def remove_temporary_objects_by_name(object_names):
-        for object_name in object_names or []:
-            obj = bpy.data.objects.get(object_name)
-            if obj is None:
-                continue
-            bpy.data.objects.remove(obj, do_unlink=True)
-
-    @staticmethod
     def _refresh_material_preview(material, context=None):
         if material is None or not material.use_nodes or material.node_tree is None:
             return
@@ -988,7 +888,6 @@ class MaterialUtils:
                 bpy.data.materials.remove(material, do_unlink=True)
 
         return removed_assignments
-
     @staticmethod
     def make_materials_single_user(obj):
         if obj is None or obj.type != 'MESH':
