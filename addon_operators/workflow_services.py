@@ -100,6 +100,12 @@ class GameAssetWorkflowServices:
         )
         ObjectUtils.select_objects(context, source_objects)
         temporary_objects = ObjectUtils.duplicate_selected(context)
+        texture_coordinate_preparation = MaterialUtils.prepare_texture_coordinate_anchors_for_objects(
+            temporary_objects,
+            apply_rotation_compensation=bool(scene.gameready_apply_rot_scale),
+        )
+        self.state.temporary_texture_anchor_names = texture_coordinate_preparation.get("anchor_object_names", [])
+        self.state.temporary_texture_material_names = texture_coordinate_preparation.get("temporary_material_names", [])
 
         if scene.gameready_apply_rot_scale:
             ObjectUtils.apply_transform_to_selected(context)
@@ -146,15 +152,33 @@ class GameAssetWorkflowServices:
         self.state.game_asset_name = game_asset.name
         SelectionCoordinator.select_single(context, game_asset)
 
+    def cleanup_temporary_texture_coordinate_anchors(self, context):
+        MaterialUtils.remove_temporary_objects_by_name(self.state.temporary_texture_anchor_names)
+        self.state.temporary_texture_anchor_names = []
+
+    def cleanup_temporary_texture_coordinate_materials(self, context):
+        MaterialUtils.remove_temporary_materials_by_name(self.state.temporary_texture_material_names)
+        self.state.temporary_texture_material_names = []
+
     def apply_shading(self, context):
         scene = context.scene
         game_asset = self.store.get_object(self.state.game_asset_name)
-        SelectionCoordinator.select_single(context, game_asset)
-
-        if scene.gameready_shade_auto_smooth:
-            bpy.ops.object.shade_auto_smooth(angle=math.radians(scene.gameready_auto_smooth_angle))
+        if game_asset is None or game_asset.type != 'MESH' or game_asset.data is None:
             return
-        bpy.ops.object.shade_flat()
+
+        mesh_data = game_asset.data
+        smooth_shading_enabled = bool(scene.gameready_shade_auto_smooth)
+
+        for polygon in mesh_data.polygons:
+            polygon.use_smooth = smooth_shading_enabled
+
+        if hasattr(mesh_data, "use_auto_smooth"):
+            mesh_data.use_auto_smooth = smooth_shading_enabled
+
+        if smooth_shading_enabled and hasattr(mesh_data, "auto_smooth_angle"):
+            mesh_data.auto_smooth_angle = math.radians(scene.gameready_auto_smooth_angle)
+
+        mesh_data.update()
 
     def uv_unwrap(self, context):
         UVUtils.unwrap_object(context, self.store.get_object(self.state.game_asset_name))
@@ -326,6 +350,8 @@ class GameAssetWorkflowServices:
 
     def finalize_scene(self, context):
         self.restore_source_materials_after_bake(context)
+        self.cleanup_temporary_texture_coordinate_anchors(context)
+        self.cleanup_temporary_texture_coordinate_materials(context)
         game_asset = self.store.get_object(self.state.game_asset_name)
         temporary_object = self.store.get_object(self.state.temporary_object_name)
         SelectionCoordinator.select_single(context, game_asset)
@@ -345,6 +371,14 @@ class GameAssetWorkflowServices:
         except Exception:
             pass
         self.state.visibility_state = {}
+        try:
+            self.cleanup_temporary_texture_coordinate_anchors(context)
+        except Exception:
+            pass
+        try:
+            self.cleanup_temporary_texture_coordinate_materials(context)
+        except Exception:
+            pass
         temporary_object = self.store.get_object(self.state.temporary_object_name)
         if temporary_object is None:
             return
