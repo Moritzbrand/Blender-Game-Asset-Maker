@@ -101,6 +101,22 @@ class GameAssetWorkflowServices:
         ObjectUtils.select_objects(context, source_objects)
         temporary_objects = ObjectUtils.duplicate_selected(context)
 
+        source_transform_records = []
+        for source_object in temporary_objects:
+            source_transform_records.append({
+                "object_name": source_object.name,
+                "matrix_world": source_object.matrix_world.copy(),
+                "material_names": [slot.material.name for slot in source_object.material_slots if slot.material is not None],
+            })
+
+        if bool(getattr(scene, "gameready_compensate_texcoord_mapping", True)):
+            for source_object in temporary_objects:
+                created_shader_assets = MaterialUtils.make_materials_single_user(source_object)
+                self.state.temporary_shader_material_names.extend(created_shader_assets.get("material_names", []))
+                self.state.temporary_shader_group_tree_names.extend(created_shader_assets.get("group_tree_names", []))
+            self.state.temporary_shader_material_names = list(dict.fromkeys(self.state.temporary_shader_material_names))
+            self.state.temporary_shader_group_tree_names = list(dict.fromkeys(self.state.temporary_shader_group_tree_names))
+
         if scene.gameready_apply_rot_scale:
             ObjectUtils.apply_transform_to_selected(context)
 
@@ -111,6 +127,14 @@ class GameAssetWorkflowServices:
             return
         temporary_object.name = f"{self.state.source_object_name}_temp"
         self.state.temporary_object_name = temporary_object.name
+
+        if bool(getattr(scene, "gameready_compensate_texcoord_mapping", True)):
+            compensation_result = MaterialUtils.inject_temp_texcoord_compensation_nodes(
+                obj=temporary_object,
+                source_transform_records=source_transform_records,
+                generated_fallback=getattr(scene, "gameready_generated_coordinate_fallback", "BEST_EFFORT"),
+            )
+            self.state.temporary_mapping_adjustment_records = compensation_result.get("records", [])
 
     def build_game_asset_mesh(self, context):
         scene = context.scene
@@ -188,8 +212,10 @@ class GameAssetWorkflowServices:
             return
 
         created_shader_assets = MaterialUtils.make_materials_single_user(source_object)
-        self.state.temporary_shader_material_names = created_shader_assets.get("material_names", [])
-        self.state.temporary_shader_group_tree_names = created_shader_assets.get("group_tree_names", [])
+        self.state.temporary_shader_material_names.extend(created_shader_assets.get("material_names", []))
+        self.state.temporary_shader_group_tree_names.extend(created_shader_assets.get("group_tree_names", []))
+        self.state.temporary_shader_material_names = list(dict.fromkeys(self.state.temporary_shader_material_names))
+        self.state.temporary_shader_group_tree_names = list(dict.fromkeys(self.state.temporary_shader_group_tree_names))
 
     def ensure_source_materials_for_bake(self, context):
         source_object = self.store.get_object(self.state.temporary_object_name)
@@ -211,6 +237,13 @@ class GameAssetWorkflowServices:
         self.state.temporary_source_materials = []
 
     def cleanup_temporary_shader_assets(self, context):
+        source_object = self.store.get_object(self.state.temporary_object_name)
+        MaterialUtils.cleanup_temp_texcoord_compensation_nodes(
+            source_object,
+            self.state.temporary_mapping_adjustment_records,
+        )
+        self.state.temporary_mapping_adjustment_records = []
+
         cleanup_result = MaterialUtils.cleanup_temporary_shader_datablocks(
             material_names=self.state.temporary_shader_material_names,
             group_tree_names=self.state.temporary_shader_group_tree_names,
