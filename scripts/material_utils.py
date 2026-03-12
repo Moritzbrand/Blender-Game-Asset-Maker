@@ -969,6 +969,289 @@ class MaterialUtils:
 
 
     @staticmethod
+    def _supports_vector_flow_node(node):
+        if node is None:
+            return False
+
+        if node.bl_idname in {
+            "ShaderNodeTexImage",
+            "ShaderNodeMapping",
+            "ShaderNodeVectorMath",
+            "ShaderNodeMix",
+            "ShaderNodeNormalMap",
+            "ShaderNodeBump",
+            "ShaderNodeDisplacement",
+            "ShaderNodeValToRGB",
+            "NodeReroute",
+            "ShaderNodeGroup",
+        }:
+            return True
+
+        return node.bl_idname.startswith("ShaderNodeTex")
+
+    @staticmethod
+    def _socket_has_supported_vector_flow(output_socket, max_hops=64):
+        if output_socket is None or not output_socket.is_linked:
+            return False
+
+        queue = list(getattr(output_socket, "links", []))
+        visited = set()
+
+        while queue and len(visited) < max_hops:
+            link = queue.pop(0)
+            if link is None:
+                continue
+
+            to_socket = getattr(link, "to_socket", None)
+            to_node = getattr(link, "to_node", None)
+            if to_socket is None or to_node is None:
+                continue
+
+            visit_key = f"{to_node.name}:{to_socket.name}"
+            if visit_key in visited:
+                continue
+            visited.add(visit_key)
+
+            if to_node.bl_idname.startswith("ShaderNodeTex"):
+                return True
+
+            if not MaterialUtils._supports_vector_flow_node(to_node):
+                continue
+
+            for node_output in getattr(to_node, "outputs", []):
+                if not getattr(node_output, "is_linked", False):
+                    continue
+                for next_link in getattr(node_output, "links", []):
+                    queue.append(next_link)
+
+        return bool(getattr(output_socket, "is_linked", False))
+
+    @staticmethod
+    def _round_vector(vector_value):
+        return tuple(round(float(component), 6) for component in vector_value)
+
+    @staticmethod
+    def _compute_compensation_values(source_matrix_world, target_matrix_world, coordinate_type):
+        if source_matrix_world is None or target_matrix_world is None:
+            return {
+                "location": (0.0, 0.0, 0.0),
+                "rotation": (0.0, 0.0, 0.0),
+                "scale": (1.0, 1.0, 1.0),
+            }
+
+        try:
+            relative_transform = target_matrix_world.inverted() @ source_matrix_world
+            inverse_transform = relative_transform.inverted()
+            location, rotation, scale = inverse_transform.decompose()
+            rotation_euler = rotation.to_euler('XYZ')
+        except Exception:
+            return {
+                "location": (0.0, 0.0, 0.0),
+                "rotation": (0.0, 0.0, 0.0),
+                "scale": (1.0, 1.0, 1.0),
+            }
+
+        if coordinate_type == "NORMAL":
+            return {
+                "location": (0.0, 0.0, 0.0),
+                "rotation": MaterialUtils._round_vector(rotation_euler),
+                "scale": (1.0, 1.0, 1.0),
+            }
+
+        if coordinate_type == "OBJECT":
+            return {
+                "location": MaterialUtils._round_vector(location),
+                "rotation": MaterialUtils._round_vector(rotation_euler),
+                "scale": MaterialUtils._round_vector(scale),
+            }
+
+        return {
+            "location": MaterialUtils._round_vector(location),
+            "rotation": MaterialUtils._round_vector(rotation_euler),
+            "scale": MaterialUtils._round_vector(scale),
+        }
+
+    @staticmethod
+    def _insert_mapping_node_for_output(node_tree, texcoord_node, output_name, compensation_values, tag_value):
+        output_socket = texcoord_node.outputs.get(output_name)
+        if output_socket is None or not output_socket.is_linked:
+            return None
+
+        if not MaterialUtils._socket_has_supported_vector_flow(output_socket):
+            return None
+
+        links = list(output_socket.links)
+        if not links:
+            return None
+
+        mapping_node = node_tree.nodes.new("ShaderNodeMapping")
+        mapping_node.name = f"GR_TempMap_{texcoord_node.name}_{output_name}"
+        mapping_node.label = "GameReady Temp Mapping"
+        mapping_node["gameready_temp"] = True
+        mapping_node["gameready_temp_mapping"] = tag_value
+
+        if output_name == "Normal":
+            mapping_node.vector_type = 'VECTOR'
+        else:
+            mapping_node.vector_type = 'POINT'
+
+        if mapping_node.inputs.get("Location") is not None:
+            mapping_node.inputs["Location"].default_value = compensation_values.get("location", (0.0, 0.0, 0.0))
+        if mapping_node.inputs.get("Rotation") is not None:
+            mapping_node.inputs["Rotation"].default_value = compensation_values.get("rotation", (0.0, 0.0, 0.0))
+        if mapping_node.inputs.get("Scale") is not None:
+            mapping_node.inputs["Scale"].default_value = compensation_values.get("scale", (1.0, 1.0, 1.0))
+
+        node_tree.links.new(output_socket, mapping_node.inputs["Vector"])
+
+        for link in links:
+            to_socket = link.to_socket
+            try:
+                node_tree.links.remove(link)
+            except Exception:
+                pass
+            node_tree.links.new(mapping_node.outputs["Vector"], to_socket)
+
+        return mapping_node
+
+    @staticmethod
+    def inject_temp_texcoord_compensation_nodes(obj, source_transform_records, generated_fallback="BEST_EFFORT"):
+        if obj is None or obj.type != 'MESH':
+            return {"records": []}
+
+        target_matrix_world = obj.matrix_world.copy()
+        source_records_by_material = {}
+
+        for record in source_transform_records or []:
+            source_matrix = record.get("matrix_world")
+            source_name = record.get("object_name", "")
+            for material_name in record.get("material_names", []):
+                source_records_by_material[material_name] = {
+                    "object_name": source_name,
+                    "matrix_world": source_matrix,
+                }
+
+        mapping_records = []
+
+        for material in MaterialUtils._iter_unique_materials(
+            [slot.material for slot in obj.material_slots if slot.material is not None]
+        ):
+            source_record = source_records_by_material.get(material.name)
+            if source_record is None:
+                continue
+
+            source_matrix_world = source_record.get("matrix_world")
+            source_object_name = source_record.get("object_name", "")
+
+            def mutate_node_tree(node_tree, _depth):
+                changed = False
+                for node in node_tree.nodes:
+                    if node.bl_idname != "ShaderNodeTexCoord":
+                        continue
+
+                    object_reference = getattr(node, "object", None)
+                    allow_object_output = object_reference is None or getattr(object_reference, "name", "") == source_object_name
+
+                    outputs_to_process = [
+                        ("Normal", "NORMAL", True),
+                        (
+                            "Generated",
+                            "GENERATED",
+                            generated_fallback == "BEST_EFFORT",
+                        ),
+                        ("Object", "OBJECT", allow_object_output),
+                    ]
+
+                    for output_name, coordinate_type, should_process in outputs_to_process:
+                        output_socket = node.outputs.get(output_name)
+                        if output_socket is None or not output_socket.is_linked:
+                            continue
+                        if not should_process:
+                            if output_name == "Generated" and output_socket is not None and output_socket.is_linked:
+                                print(f"[GameReady] Skipping Generated coordinate compensation for material '{material.name}' due to fallback policy.")
+                            continue
+
+                        compensation_values = MaterialUtils._compute_compensation_values(
+                            source_matrix_world=source_matrix_world,
+                            target_matrix_world=target_matrix_world,
+                            coordinate_type=coordinate_type,
+                        )
+                        mapping_node = MaterialUtils._insert_mapping_node_for_output(
+                            node_tree=node_tree,
+                            texcoord_node=node,
+                            output_name=output_name,
+                            compensation_values=compensation_values,
+                            tag_value=obj.name,
+                        )
+                        if mapping_node is None:
+                            continue
+
+                        mapping_records.append({
+                            "object_name": obj.name,
+                            "material_name": material.name,
+                            "node_tree_name": node_tree.name,
+                            "mapping_node_name": mapping_node.name,
+                        })
+                        changed = True
+
+                return changed
+
+            MaterialUtils.walk_material_node_trees(
+                materials=[material],
+                mutate_node_tree=mutate_node_tree,
+                duplicate_shared_groups=True,
+            )
+
+        return {"records": mapping_records}
+
+    @staticmethod
+    def cleanup_temp_texcoord_compensation_nodes(obj, mapping_records):
+        if obj is None or obj.type != 'MESH' or not mapping_records:
+            return 0
+
+        removed_count = 0
+
+        def mutate_node_tree(node_tree, _depth):
+            nonlocal removed_count
+            changed = False
+            for node in list(node_tree.nodes):
+                if node.bl_idname != "ShaderNodeMapping":
+                    continue
+                if not bool(node.get("gameready_temp", False)):
+                    continue
+
+                tag_value = str(node.get("gameready_temp_mapping", ""))
+                if tag_value != obj.name:
+                    continue
+
+                input_socket = node.inputs.get("Vector")
+                output_socket = node.outputs.get("Vector")
+
+                source_sockets = [link.from_socket for link in list(input_socket.links)] if input_socket else []
+                target_sockets = [link.to_socket for link in list(output_socket.links)] if output_socket else []
+
+                for source_socket in source_sockets:
+                    for target_socket in target_sockets:
+                        node_tree.links.new(source_socket, target_socket)
+
+                try:
+                    node_tree.nodes.remove(node)
+                    removed_count += 1
+                    changed = True
+                except Exception:
+                    pass
+
+            return changed
+
+        MaterialUtils.walk_object_material_node_trees(
+            obj,
+            mutate_node_tree=mutate_node_tree,
+            duplicate_shared_groups=False,
+        )
+
+        return removed_count
+
+    @staticmethod
     def ensure_standard_material_on_empty_slots(obj, material_name_prefix="Gameready_Standard"):
         """Assign a temporary standard material to any empty material slots.
 
@@ -1075,17 +1358,20 @@ class MaterialUtils:
 
         duplicated_group_tree_names = []
 
-        for node in material.node_tree.nodes:
-            if node.bl_idname != "ShaderNodeGroup":
-                continue
+        def mutate_node_tree(_node_tree, _depth):
+            return False
 
-            node_tree = node.node_tree
-            if node_tree is None or node_tree.users <= 1:
-                continue
+        modified_node_trees = MaterialUtils.walk_material_node_trees(
+            materials=[material],
+            mutate_node_tree=mutate_node_tree,
+            should_mutate_node_tree=lambda _node_tree, _depth: True,
+            duplicate_shared_groups=True,
+        )
 
-            duplicated_tree = node_tree.copy()
-            node.node_tree = duplicated_tree
-            duplicated_group_tree_names.append(duplicated_tree.name)
+        for node_tree in modified_node_trees:
+            if node_tree == material.node_tree:
+                continue
+            duplicated_group_tree_names.append(node_tree.name)
 
         return material, duplicated_group_tree_names
 

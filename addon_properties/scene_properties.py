@@ -35,6 +35,8 @@ SCENE_PROPERTIES = [
     IntSceneProperty("gameready_uv_island_margin", "UV Island Margin", "Final UV island margin in pixels used when packing islands", default=1, min=0, max=16),
     BoolSceneProperty("gameready_bake_selected_to_active", "Bake Selected to Active", "Use non-active selected objects as bake source and the active object as the bake target", False),
     BoolSceneProperty("gameready_apply_rot_scale", "Apply Rotation & Scale", "Apply rotation and scale before creating the game asset", True),
+    BoolSceneProperty("gameready_compensate_texcoord_mapping", "Compensate Procedural Mapping", "Best-effort compensation for TexCoord Object/Generated/Normal outputs on temporary bake source objects", True),
+    EnumSceneProperty("gameready_generated_coordinate_fallback", "Generated Coordinate Fallback", "Fallback policy when Generated coordinate compensation cannot be guaranteed", items=[('BEST_EFFORT','Best Effort','Apply compensation and continue'),('SKIP_GENERATED','Skip Generated Compensation','Ignore Generated outputs and keep them unchanged')], default='BEST_EFFORT'),
     BoolSceneProperty("gameready_merge_by_distance", "Merge by Distance", "Remove duplicate vertices within a certain distance to optimize the mesh for game engines", True),
     FloatSceneProperty("gameready_merge_distance", "Merge Distance", "Distance threshold for merging vertices when 'Merge by Distance' is enabled", default=0.0001, min=0.0, max=0.1),
     BoolSceneProperty("gameready_unsubdivide", "Unsubdivide", "Unsubdivide the mesh of the new game asset", False),
