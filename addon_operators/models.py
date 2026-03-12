@@ -40,4 +40,3 @@ class WorkflowState:
     temporary_source_materials: list[dict[str, str]] = field(default_factory=list)
     temporary_shader_material_names: list[str] = field(default_factory=list)
     temporary_shader_group_tree_names: list[str] = field(default_factory=list)
-    temporary_mapping_adjustment_records: list[dict[str, str]] = field(default_factory=list)

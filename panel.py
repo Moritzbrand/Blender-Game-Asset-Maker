@@ -113,11 +113,6 @@ class GAMEREADY_PT_panel_base(bpy.types.Panel):
         sub.enabled = scene.gameready_bake_textures
         sub.prop(scene, "gameready_texture_size")
         sub.prop(scene, "gameready_texture_compression")
-        sub.prop(scene, "gameready_compensate_texcoord_mapping")
-
-        generated_fallback_column = sub.column()
-        generated_fallback_column.enabled = scene.gameready_compensate_texcoord_mapping
-        generated_fallback_column.prop(scene, "gameready_generated_coordinate_fallback")
         sub.prop(scene, "gameready_bake_base_color")
 
         subsub = sub.column()
