@@ -334,15 +334,121 @@ class MaterialUtils:
             links.remove(link)
 
     @staticmethod
-    def _find_normal_map_node_for_texture_node(normal_texture_node):
-        if normal_texture_node is None:
+    def _is_live_link(link):
+        if link is None:
+            return False
+        if not getattr(link, "is_valid", True):
+            return False
+
+        from_node = getattr(link, "from_node", None)
+        to_node = getattr(link, "to_node", None)
+
+        if from_node is None or to_node is None:
+            return False
+        if getattr(from_node, "mute", False) and len(getattr(from_node, "internal_links", [])) == 0:
+            return False
+        if getattr(to_node, "mute", False) and len(getattr(to_node, "internal_links", [])) == 0:
+            return False
+        return True
+
+    @staticmethod
+    def _iter_node_outputs_for_traversal(node):
+        # Reroutes are pass-through and should always be traversed.
+        if node.bl_idname == "NodeReroute":
+            output_socket = node.outputs[0] if node.outputs else None
+            if output_socket is not None:
+                yield output_socket
+            return
+
+        # When muted, Blender uses internal links to bypass node processing.
+        if getattr(node, "mute", False):
+            for internal_link in getattr(node, "internal_links", []):
+                if internal_link is None:
+                    continue
+                output_socket = getattr(internal_link, "to_socket", None)
+                if output_socket is not None:
+                    yield output_socket
+            return
+
+        passthrough_vector_nodes = {
+            "ShaderNodeMapping",
+            "ShaderNodeVectorMath",
+            "ShaderNodeSeparateXYZ",
+            "ShaderNodeCombineXYZ",
+            "ShaderNodeSeparateColor",
+            "ShaderNodeCombineColor",
+            "ShaderNodeRGBCurve",
+            "ShaderNodeCurveVec",
+        }
+
+        if node.bl_idname in passthrough_vector_nodes:
+            for output_socket in node.outputs:
+                if output_socket.type in {"VECTOR", "RGBA", "VALUE"}:
+                    yield output_socket
+            return
+
+        for output_socket in node.outputs:
+            yield output_socket
+
+    @staticmethod
+    def _iter_downstream_nodes(node):
+        for output_socket in MaterialUtils._iter_node_outputs_for_traversal(node):
+            for output_link in output_socket.links:
+                if not MaterialUtils._is_live_link(output_link):
+                    continue
+                yield output_link.to_node
+
+    @staticmethod
+    def _resolve_group_output_socket(group_node, inner_socket):
+        if group_node is None or inner_socket is None:
+            return None
+        if group_node.bl_idname != "ShaderNodeGroup":
             return None
 
-        color_output = normal_texture_node.outputs.get("Color")
-        if color_output is None:
+        for candidate in group_node.outputs:
+            if candidate.name == inner_socket.name:
+                return candidate
+        return None
+
+    @staticmethod
+    def _iter_group_output_nodes(node_tree):
+        if node_tree is None:
+            return []
+        return [node for node in node_tree.nodes if node.bl_idname == "NodeGroupOutput" and getattr(node, "is_active_output", True)]
+
+    @staticmethod
+    def _iter_group_input_nodes(node_tree):
+        if node_tree is None:
+            return []
+        return [node for node in node_tree.nodes if node.bl_idname == "NodeGroupInput"]
+
+    @staticmethod
+    def _find_group_normal_map_from_socket(group_node, inner_input_socket):
+        node_tree = getattr(group_node, "node_tree", None)
+        if node_tree is None or inner_input_socket is None:
             return None
 
-        nodes_to_visit = [link.to_node for link in color_output.links]
+        group_outputs = MaterialUtils._iter_group_output_nodes(node_tree)
+        if not group_outputs:
+            return None
+
+        seeds = []
+        for group_output in group_outputs:
+            target_input = group_output.inputs.get(inner_input_socket.name)
+            if target_input is None:
+                continue
+            for link in target_input.links:
+                if MaterialUtils._is_live_link(link):
+                    seeds.append(link.from_node)
+
+        return MaterialUtils._find_first_downstream_node_by_idname(
+            seeds,
+            target_idnames={"ShaderNodeNormalMap"},
+        )
+
+    @staticmethod
+    def _find_first_downstream_node_by_idname(seed_nodes, target_idnames):
+        nodes_to_visit = [node for node in seed_nodes if node is not None]
         visited_node_pointers = set()
 
         while nodes_to_visit:
@@ -353,14 +459,101 @@ class MaterialUtils:
                 continue
             visited_node_pointers.add(current_node_pointer)
 
-            if current_node.bl_idname == "ShaderNodeNormalMap":
+            if current_node.bl_idname in target_idnames:
                 return current_node
 
-            for output_socket in current_node.outputs:
-                for output_link in output_socket.links:
-                    nodes_to_visit.append(output_link.to_node)
+            # Traverse into groups via Group Output interfaces.
+            if current_node.bl_idname == "ShaderNodeGroup":
+                for group_input in current_node.inputs:
+                    if group_input is None or not group_input.is_linked:
+                        continue
+                    nested_target = MaterialUtils._find_group_normal_map_from_socket(current_node, group_input)
+                    if nested_target is not None:
+                        return nested_target
+
+            for downstream_node in MaterialUtils._iter_downstream_nodes(current_node):
+                nodes_to_visit.append(downstream_node)
 
         return None
+
+    @staticmethod
+    def _link_reaches_target_node(start_link, target_node):
+        if start_link is None or target_node is None:
+            return False
+        if not MaterialUtils._is_live_link(start_link):
+            return False
+
+        nodes_to_visit = [start_link.to_node]
+        visited = set()
+        target_pointer = target_node.as_pointer()
+
+        while nodes_to_visit:
+            node = nodes_to_visit.pop(0)
+            pointer = node.as_pointer()
+            if pointer in visited:
+                continue
+            visited.add(pointer)
+
+            if pointer == target_pointer:
+                return True
+
+            for downstream_node in MaterialUtils._iter_downstream_nodes(node):
+                nodes_to_visit.append(downstream_node)
+
+        return False
+
+    @staticmethod
+    def _find_stable_vector_injection_link(texture_node):
+        if texture_node is None:
+            return None
+
+        vector_input = texture_node.inputs.get("Vector")
+        if vector_input is None or not vector_input.is_linked:
+            return None
+
+        current_link = vector_input.links[0]
+        visited_links = set()
+        upstream_passthrough_nodes = {"NodeReroute", "ShaderNodeMapping", "ShaderNodeVectorMath"}
+
+        while current_link is not None:
+            link_key = (current_link.from_node.as_pointer(), current_link.to_node.as_pointer())
+            if link_key in visited_links:
+                break
+            visited_links.add(link_key)
+
+            upstream_node = current_link.from_node
+            if upstream_node.bl_idname not in upstream_passthrough_nodes:
+                break
+
+            upstream_input = upstream_node.inputs[0] if upstream_node.inputs else None
+            if upstream_input is None or not upstream_input.is_linked:
+                break
+
+            next_link = upstream_input.links[0]
+            if not MaterialUtils._is_live_link(next_link):
+                break
+            current_link = next_link
+
+        return current_link
+
+    @staticmethod
+    def _find_normal_map_node_for_texture_node(normal_texture_node):
+        if normal_texture_node is None:
+            return None
+
+        color_output = normal_texture_node.outputs.get("Color")
+        if color_output is None:
+            return None
+
+        seed_nodes = []
+        for link in color_output.links:
+            if MaterialUtils._is_live_link(link):
+                seed_nodes.append(link.to_node)
+
+        return MaterialUtils._find_first_downstream_node_by_idname(
+            seed_nodes,
+            target_idnames={"ShaderNodeNormalMap"},
+        )
 
     @staticmethod
     def _remove_existing_normal_y_display_fix_nodes(nodes):
@@ -388,7 +581,22 @@ class MaterialUtils:
         if texture_color_output is None or normal_map_color_input is None:
             return
 
-        MaterialUtils._remove_links_from_socket(links, normal_map_color_input)
+        injection_link = None
+        for candidate_link in texture_color_output.links:
+            if MaterialUtils._link_reaches_target_node(candidate_link, normal_map_node):
+                injection_link = candidate_link
+                break
+
+        injection_target_input = normal_map_color_input
+        source_socket_for_fix = texture_color_output
+
+        if injection_link is not None:
+            injection_target_input = injection_link.to_socket
+            source_socket_for_fix = injection_link.from_socket
+            links.remove(injection_link)
+        else:
+            MaterialUtils._remove_links_from_socket(links, normal_map_color_input)
+
         MaterialUtils._remove_existing_normal_y_display_fix_nodes(nodes)
 
         node_y = int(getattr(normal_texture_node, "location", (0, 0))[1])
@@ -420,12 +628,12 @@ class MaterialUtils:
         except Exception:
             pass
 
-        links.new(texture_color_output, separate_color_node.inputs["Color"])
+        links.new(source_socket_for_fix, separate_color_node.inputs["Color"])
         links.new(separate_color_node.outputs["Red"], combine_color_node.inputs["Red"])
         links.new(separate_color_node.outputs["Blue"], combine_color_node.inputs["Blue"])
         links.new(separate_color_node.outputs["Green"], invert_green_node.inputs[1])
         links.new(invert_green_node.outputs["Value"], combine_color_node.inputs["Green"])
-        links.new(combine_color_node.outputs["Color"], normal_map_color_input)
+        links.new(combine_color_node.outputs["Color"], injection_target_input)
 
     @staticmethod
     def apply_normal_y_display_fix_to_material(material):
