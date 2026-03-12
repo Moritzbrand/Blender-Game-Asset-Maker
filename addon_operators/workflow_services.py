@@ -101,6 +101,22 @@ class GameAssetWorkflowServices:
         ObjectUtils.select_objects(context, source_objects)
         temporary_objects = ObjectUtils.duplicate_selected(context)
 
+        self.state.temporary_helper_object_names = []
+        if scene.gameready_bake_textures:
+            active_source_object = self._active_source_object()
+            rotation_center_world = None
+            if active_source_object is not None:
+                rotation_center_world = active_source_object.matrix_world.translation.copy()
+
+            for original_object, temporary_object in zip(source_objects, temporary_objects):
+                result = MaterialUtils.prepare_bake_coordinate_nodes_for_source_object(
+                    context=context,
+                    source_object=temporary_object,
+                    original_object=original_object,
+                    rotation_center_world=rotation_center_world,
+                )
+                self.state.temporary_helper_object_names.extend(result.helper_object_names)
+
         if scene.gameready_apply_rot_scale:
             ObjectUtils.apply_transform_to_selected(context)
 
@@ -176,12 +192,6 @@ class GameAssetWorkflowServices:
         ]
         self.state.visibility_state = BakingUtils.store_render_visibility(objects_to_hide)
         BakingUtils.hide_from_render(objects_to_hide)
-
-    def make_source_materials_single_user(self, context):
-        source_object = self.store.get_object(self.state.temporary_object_name)
-        if source_object is None:
-            source_object = self.store.get_object(self.state.game_asset_name)
-        MaterialUtils.make_materials_single_user(source_object)
 
     def ensure_source_materials_for_bake(self, context):
         source_object = self.store.get_object(self.state.temporary_object_name)
@@ -324,8 +334,16 @@ class GameAssetWorkflowServices:
         )
         MaterialUtils.refresh_material_preview_on_object(game_asset, context=context)
 
+    def _cleanup_temporary_helpers(self):
+        for helper_name in list(self.state.temporary_helper_object_names):
+            helper_object = self.store.get_object(helper_name)
+            if helper_object is not None:
+                bpy.data.objects.remove(helper_object, do_unlink=True)
+        self.state.temporary_helper_object_names = []
+
     def finalize_scene(self, context):
         self.restore_source_materials_after_bake(context)
+        self._cleanup_temporary_helpers()
         game_asset = self.store.get_object(self.state.game_asset_name)
         temporary_object = self.store.get_object(self.state.temporary_object_name)
         SelectionCoordinator.select_single(context, game_asset)
@@ -345,6 +363,12 @@ class GameAssetWorkflowServices:
         except Exception:
             pass
         self.state.visibility_state = {}
+
+        try:
+            self._cleanup_temporary_helpers()
+        except Exception:
+            pass
+
         temporary_object = self.store.get_object(self.state.temporary_object_name)
         if temporary_object is None:
             return
