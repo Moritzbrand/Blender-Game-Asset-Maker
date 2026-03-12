@@ -39,3 +39,6 @@ class WorkflowState:
     bake_margin: int = 1
     resolved_cage_extrusion: float = 0.0
     temporary_source_materials: list[dict[str, str | int]] = field(default_factory=list)
+    temporary_coord_fix_nodes: list[dict[str, str]] = field(default_factory=list)
+    temporary_coord_fix_material_names: list[str] = field(default_factory=list)
+    temporary_copied_material_names: list[str] = field(default_factory=list)
