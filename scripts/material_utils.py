@@ -20,6 +20,7 @@ class MaterialUtils:
 
     RISKY_TEXCOORD_OUTPUT_NAMES = {"Normal", "Generated", "Object"}
     TEXCOORD_COMPENSATION_NODE_PREFIX = "GR_TexCoordComp_"
+    TEMP_COORD_FIX_NODE_PREFIX = "GR_TempCoordFix_"
 
     @staticmethod
     def _refresh_material_preview(material, context=None):
@@ -937,7 +938,7 @@ class MaterialUtils:
         return channels
 
     @staticmethod
-    def make_materials_single_user_for_bake_channels(obj, bake_object, bake_channels):
+    def make_materials_single_user_for_bake_channels(obj, bake_object, bake_channels, temp_coord_fix_prefix=None):
         replacement_map = MaterialUtils.build_material_replacement_map_for_bake_channels(
             obj=obj,
             bake_object=bake_object,
@@ -949,13 +950,24 @@ class MaterialUtils:
                 continue
             obj.material_slots[slot_index].material = replacement_material
 
-        MaterialUtils.apply_texcoord_compensation_for_bake_channels(
+        inserted_mapping_nodes = MaterialUtils.apply_texcoord_compensation_for_bake_channels(
             obj=obj,
             original_object=bake_object,
             bake_channels=bake_channels,
+            temp_coord_fix_prefix=temp_coord_fix_prefix,
         )
 
-        return replacement_map
+        copied_material_names = list(dict.fromkeys(
+            replacement_material.name
+            for replacement_material in replacement_map.values()
+            if replacement_material is not None
+        ))
+
+        return {
+            "replacement_map": replacement_map,
+            "copied_material_names": copied_material_names,
+            "inserted_mapping_nodes": inserted_mapping_nodes,
+        }
 
     @staticmethod
     def build_material_replacement_map_for_bake_channels(obj, bake_object, bake_channels):
@@ -1248,11 +1260,11 @@ class MaterialUtils:
         return tuple(location), tuple(rotation.to_euler('XYZ')), tuple(scale)
 
     @staticmethod
-    def _insert_mapping_after_texcoord_output(node_tree, texcoord_node, output_socket, location, rotation, scale):
+    def _insert_mapping_after_texcoord_output(node_tree, texcoord_node, output_socket, location, rotation, scale, temp_coord_fix_prefix):
         links = node_tree.links
         target_links = list(output_socket.links)
         if not target_links:
-            return False
+            return []
 
         existing_comp_nodes = []
         for link in target_links:
@@ -1261,7 +1273,7 @@ class MaterialUtils:
                 continue
             if to_node.bl_idname != "ShaderNodeMapping":
                 continue
-            if str(getattr(to_node, "name", "")).startswith(MaterialUtils.TEXCOORD_COMPENSATION_NODE_PREFIX):
+            if str(getattr(to_node, "name", "")).startswith(MaterialUtils.TEMP_COORD_FIX_NODE_PREFIX):
                 existing_comp_nodes.append(to_node)
 
         for mapping_node in existing_comp_nodes:
@@ -1275,10 +1287,10 @@ class MaterialUtils:
 
         target_links = list(output_socket.links)
         if not target_links:
-            return False
+            return []
 
         mapping_node = node_tree.nodes.new("ShaderNodeMapping")
-        mapping_node.name = f"{MaterialUtils.TEXCOORD_COMPENSATION_NODE_PREFIX}{output_socket.name}"
+        mapping_node.name = f"{temp_coord_fix_prefix}{output_socket.name}"
         mapping_node.label = f"GR TexCoord Compensation ({output_socket.name})"
         mapping_node.vector_type = 'POINT'
         mapping_node.location = (texcoord_node.location.x + 220, texcoord_node.location.y)
@@ -1294,12 +1306,12 @@ class MaterialUtils:
             links.new(mapping_node.outputs["Vector"], to_socket)
 
         links.new(output_socket, mapping_node.inputs["Vector"])
-        return True
+        return [mapping_node.name]
 
     @staticmethod
-    def apply_texcoord_compensation_for_bake_channels(obj, original_object, bake_channels):
+    def apply_texcoord_compensation_for_bake_channels(obj, original_object, bake_channels, temp_coord_fix_prefix=None):
         if obj is None or obj.type != 'MESH' or original_object is None:
-            return 0
+            return []
 
         normalized_bake_channels = {
             str(channel).upper()
@@ -1307,11 +1319,15 @@ class MaterialUtils:
             if str(channel).upper() in MaterialUtils.EMIT_CHANNEL_TO_PRINCIPLED_INPUT_NAMES
         }
         if not normalized_bake_channels:
-            return 0
+            return []
+
+        temp_coord_fix_prefix = str(temp_coord_fix_prefix or MaterialUtils.TEMP_COORD_FIX_NODE_PREFIX)
+        if not temp_coord_fix_prefix.startswith(MaterialUtils.TEMP_COORD_FIX_NODE_PREFIX):
+            temp_coord_fix_prefix = f"{MaterialUtils.TEMP_COORD_FIX_NODE_PREFIX}{temp_coord_fix_prefix}"
 
         final_to_original_local = original_object.matrix_world.inverted() @ obj.matrix_world
 
-        transformed_material_count = 0
+        inserted_mapping_nodes = []
         seen_materials = set()
 
         for slot in obj.material_slots:
@@ -1331,7 +1347,7 @@ class MaterialUtils:
             ):
                 continue
 
-            inserted_mapping = False
+            inserted_node_names = []
             for node in list(material.node_tree.nodes):
                 if node.bl_idname != "ShaderNodeTexCoord":
                     continue
@@ -1355,16 +1371,20 @@ class MaterialUtils:
                         )
 
                     location, rotation, scale = MaterialUtils._decompose_mapping_components(compensation_matrix)
-                    inserted_mapping |= MaterialUtils._insert_mapping_after_texcoord_output(
+                    inserted_node_names.extend(MaterialUtils._insert_mapping_after_texcoord_output(
                         node_tree=material.node_tree,
                         texcoord_node=node,
                         output_socket=output_socket,
                         location=location,
                         rotation=rotation,
                         scale=scale,
-                    )
+                        temp_coord_fix_prefix=temp_coord_fix_prefix,
+                    ))
 
-            if inserted_mapping:
-                transformed_material_count += 1
+            for node_name in inserted_node_names:
+                inserted_mapping_nodes.append({
+                    "material_name": material.name,
+                    "node_name": node_name,
+                })
 
-        return transformed_material_count
+        return inserted_mapping_nodes
