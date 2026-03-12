@@ -9,183 +9,6 @@ from .image_utils import ImageUtils
 
 class MaterialUtils:
     @staticmethod
-    def _iter_texture_coordinate_nodes(material):
-        if material is None or not material.use_nodes or material.node_tree is None:
-            return []
-
-        return [
-            node
-            for node in material.node_tree.nodes
-            if getattr(node, "bl_idname", "") == "ShaderNodeTexCoord"
-        ]
-
-    @staticmethod
-    def _texture_coordinate_node_uses_only_object_output(node):
-        object_output_socket = node.outputs.get("Object") if node is not None else None
-        if object_output_socket is None or not object_output_socket.is_linked:
-            return False
-
-        for output_socket in node.outputs:
-            if output_socket == object_output_socket:
-                continue
-            if output_socket.is_linked:
-                return False
-        return True
-
-    @staticmethod
-    def _texture_coordinate_output_is_used(node, output_name):
-        output_socket = node.outputs.get(output_name) if node is not None else None
-        return output_socket is not None and output_socket.is_linked
-
-    @staticmethod
-    def _insert_inverse_rotation_mapping_node(node_tree, tex_coord_node, output_name, inverse_rotation):
-        source_socket = tex_coord_node.outputs.get(output_name)
-        if source_socket is None or not source_socket.is_linked:
-            return False
-
-        links = node_tree.links
-        source_links = [link for link in links if link.from_socket == source_socket]
-        if not source_links:
-            return False
-
-        mapping_node = node_tree.nodes.new(type="ShaderNodeMapping")
-        mapping_node.label = f"GR Temporary {output_name} Rotation Fix"
-        mapping_node.location = (tex_coord_node.location.x + 220, tex_coord_node.location.y - 120)
-
-        rotation_input = mapping_node.inputs.get("Rotation")
-        vector_input = mapping_node.inputs.get("Vector")
-        vector_output = mapping_node.outputs.get("Vector")
-
-        if rotation_input is None or vector_input is None or vector_output is None:
-            node_tree.nodes.remove(mapping_node)
-            return False
-
-        rotation_input.default_value = inverse_rotation
-
-        for link in source_links:
-            to_socket = link.to_socket
-            links.remove(link)
-            links.new(vector_output, to_socket)
-
-        links.new(source_socket, vector_input)
-        return True
-
-    @staticmethod
-    def _texture_coordinate_node_needs_anchor(node, owner_object):
-        target_object = getattr(node, "object", None)
-        if target_object is None:
-            return True
-        if owner_object is not None and target_object == owner_object:
-            return True
-        return getattr(target_object, "type", "") == 'EMPTY'
-
-    @staticmethod
-    def _create_texture_coordinate_anchor_empty(owner_object, name_prefix="GR_TexCoordAnchor"):
-        if owner_object is None:
-            return None
-
-        anchor_object = bpy.data.objects.new(name=f"{name_prefix}_{owner_object.name}", object_data=None)
-        anchor_object.empty_display_type = 'PLAIN_AXES'
-        anchor_object.matrix_world = owner_object.matrix_world.copy()
-
-        target_collection = owner_object.users_collection[0] if owner_object.users_collection else bpy.context.scene.collection
-        target_collection.objects.link(anchor_object)
-        return anchor_object
-
-    @staticmethod
-    def prepare_texture_coordinate_anchors_for_objects(objects, apply_rotation_compensation=True):
-        created_anchor_names = []
-        created_temporary_material_names = []
-
-        for obj in objects:
-            if obj is None or obj.type != 'MESH':
-                continue
-
-            created_temporary_material_names.extend(MaterialUtils.make_materials_single_user(obj))
-            inverse_rotation = tuple(-value for value in obj.matrix_world.to_euler('XYZ'))
-
-            anchor_object = None
-            seen_materials = set()
-
-            for material_slot in obj.material_slots:
-                material = material_slot.material
-                if material is None:
-                    continue
-
-                material_pointer = material.as_pointer()
-                if material_pointer in seen_materials:
-                    continue
-                seen_materials.add(material_pointer)
-
-                nodes_requiring_anchor = [
-                    node
-                    for node in MaterialUtils._iter_texture_coordinate_nodes(material)
-                    if MaterialUtils._texture_coordinate_node_uses_only_object_output(node)
-                    and MaterialUtils._texture_coordinate_node_needs_anchor(node, obj)
-                ]
-
-                generated_or_normal_nodes = []
-                if apply_rotation_compensation:
-                    generated_or_normal_nodes = [
-                        node
-                        for node in MaterialUtils._iter_texture_coordinate_nodes(material)
-                        if MaterialUtils._texture_coordinate_output_is_used(node, "Generated")
-                        or MaterialUtils._texture_coordinate_output_is_used(node, "Normal")
-                    ]
-
-                if not nodes_requiring_anchor and not generated_or_normal_nodes:
-                    continue
-
-                if anchor_object is None:
-                    anchor_object = MaterialUtils._create_texture_coordinate_anchor_empty(obj)
-                    if anchor_object is not None:
-                        created_anchor_names.append(anchor_object.name)
-
-                if anchor_object is None:
-                    continue
-
-                for node in nodes_requiring_anchor:
-                    node.object = anchor_object
-
-                for node in generated_or_normal_nodes:
-                    if MaterialUtils._texture_coordinate_output_is_used(node, "Generated"):
-                        MaterialUtils._insert_inverse_rotation_mapping_node(
-                            material.node_tree,
-                            node,
-                            "Generated",
-                            inverse_rotation,
-                        )
-
-                    if MaterialUtils._texture_coordinate_output_is_used(node, "Normal"):
-                        MaterialUtils._insert_inverse_rotation_mapping_node(
-                            material.node_tree,
-                            node,
-                            "Normal",
-                            inverse_rotation,
-                        )
-
-        return {
-            "anchor_object_names": created_anchor_names,
-            "temporary_material_names": created_temporary_material_names,
-        }
-
-    @staticmethod
-    def remove_temporary_objects_by_name(object_names):
-        for object_name in object_names or []:
-            obj = bpy.data.objects.get(object_name)
-            if obj is None:
-                continue
-            bpy.data.objects.remove(obj, do_unlink=True)
-
-    @staticmethod
-    def remove_temporary_materials_by_name(material_names):
-        for material_name in material_names or []:
-            material = bpy.data.materials.get(material_name)
-            if material is None or material.users > 0:
-                continue
-            bpy.data.materials.remove(material, do_unlink=True)
-
-    @staticmethod
     def _refresh_material_preview(material, context=None):
         if material is None or not material.use_nodes or material.node_tree is None:
             return
@@ -1065,14 +888,12 @@ class MaterialUtils:
                 bpy.data.materials.remove(material, do_unlink=True)
 
         return removed_assignments
-
     @staticmethod
     def make_materials_single_user(obj):
         if obj is None or obj.type != 'MESH':
             raise ValueError("Object must be a mesh")
 
         copied = {}
-        created_material_names = []
 
         for slot in obj.material_slots:
             mat = slot.material
@@ -1082,8 +903,5 @@ class MaterialUtils:
             key = mat.name_full
             if key not in copied:
                 copied[key] = mat.copy()
-                created_material_names.append(copied[key].name)
 
             slot.material = copied[key]
-
-        return created_material_names
