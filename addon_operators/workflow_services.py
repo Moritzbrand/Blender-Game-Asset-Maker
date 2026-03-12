@@ -1,7 +1,6 @@
 # Purpose: workflow services module.
 # Example: import workflow_services
 import math
-import uuid
 
 import bpy
 
@@ -116,66 +115,6 @@ class GameAssetWorkflowServices:
         self.state.temporary_object_name = ""
         self.state.temporary_source_object_names = []
 
-    def _cleanup_temporary_coord_fix_data(self):
-        material_names_to_scan = set(self.state.temporary_coord_fix_material_names)
-
-        for node_record in self.state.temporary_coord_fix_nodes:
-            material_name = str(node_record.get("material_name", ""))
-            node_name = str(node_record.get("node_name", ""))
-            if not material_name or not node_name:
-                continue
-
-            material = bpy.data.materials.get(material_name)
-            if material is None or material.node_tree is None:
-                continue
-
-            node_tree = material.node_tree
-            links = node_tree.links
-            node = node_tree.nodes.get(node_name)
-            if node is None:
-                continue
-
-            for output in node.outputs:
-                for link in list(output.links):
-                    links.remove(link)
-            for input_socket in node.inputs:
-                for link in list(input_socket.links):
-                    links.remove(link)
-            node_tree.nodes.remove(node)
-            material_names_to_scan.add(material_name)
-
-        for material_name in material_names_to_scan:
-            material = bpy.data.materials.get(material_name)
-            if material is None or material.node_tree is None:
-                continue
-
-            node_tree = material.node_tree
-            links = node_tree.links
-            temp_nodes = [
-                node
-                for node in list(node_tree.nodes)
-                if str(getattr(node, "name", "")).startswith(MaterialUtils.TEMP_COORD_FIX_NODE_PREFIX)
-            ]
-            for node in temp_nodes:
-                for output in node.outputs:
-                    for link in list(output.links):
-                        links.remove(link)
-                for input_socket in node.inputs:
-                    for link in list(input_socket.links):
-                        links.remove(link)
-                node_tree.nodes.remove(node)
-
-        for material_name in list(dict.fromkeys(self.state.temporary_copied_material_names)):
-            material = bpy.data.materials.get(material_name)
-            if material is None:
-                continue
-            if material.users == 0:
-                bpy.data.materials.remove(material, do_unlink=True)
-
-        self.state.temporary_coord_fix_nodes = []
-        self.state.temporary_coord_fix_material_names = []
-        self.state.temporary_copied_material_names = []
-
     def store_created_images(self, created_images):
         self.state.created_image_names = {
             image_key: image.name
@@ -289,29 +228,16 @@ class GameAssetWorkflowServices:
         BakingUtils.hide_from_render(objects_to_hide)
 
     def make_source_materials_single_user(self, context):
-        self.state.temporary_coord_fix_nodes = []
-        self.state.temporary_coord_fix_material_names = []
-        self.state.temporary_copied_material_names = []
-
         bake_channels = MaterialUtils.get_enabled_emit_bake_channels(context.scene)
         if not bake_channels:
             return
 
         for source_object in self._temporary_source_objects():
-            temp_coord_fix_prefix = f"{MaterialUtils.TEMP_COORD_FIX_NODE_PREFIX}{uuid.uuid4().hex[:8]}_"
-            material_result = MaterialUtils.make_materials_single_user_for_bake_channels(
+            MaterialUtils.make_materials_single_user_for_bake_channels(
                 obj=source_object,
                 bake_object=source_object,
                 bake_channels=bake_channels,
-                temp_coord_fix_prefix=temp_coord_fix_prefix,
             )
-            self.state.temporary_coord_fix_nodes.extend(material_result.get("inserted_mapping_nodes", []))
-            self.state.temporary_coord_fix_material_names.extend(
-                node_record.get("material_name", "")
-                for node_record in material_result.get("inserted_mapping_nodes", [])
-                if node_record.get("material_name", "")
-            )
-            self.state.temporary_copied_material_names.extend(material_result.get("copied_material_names", []))
 
     def ensure_source_materials_for_bake(self, context):
         source_objects = self._temporary_source_objects()
@@ -470,7 +396,6 @@ class GameAssetWorkflowServices:
 
     def finalize_scene(self, context):
         self.restore_source_materials_after_bake(context)
-        self._cleanup_temporary_coord_fix_data()
         game_asset = self.store.get_object(self.state.game_asset_name)
         SelectionCoordinator.select_single(context, game_asset)
         if game_asset is not None:
@@ -480,10 +405,6 @@ class GameAssetWorkflowServices:
     def safe_cleanup(self, context):
         try:
             self.restore_source_materials_after_bake(context)
-        except Exception:
-            pass
-        try:
-            self._cleanup_temporary_coord_fix_data()
         except Exception:
             pass
         try:
