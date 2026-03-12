@@ -228,16 +228,8 @@ class GameAssetWorkflowServices:
         BakingUtils.hide_from_render(objects_to_hide)
 
     def make_source_materials_single_user(self, context):
-        bake_channels = MaterialUtils.get_enabled_emit_bake_channels(context.scene)
-        if not bake_channels:
-            return
-
         for source_object in self._temporary_source_objects():
-            MaterialUtils.make_materials_single_user_for_bake_channels(
-                obj=source_object,
-                bake_object=source_object,
-                bake_channels=bake_channels,
-            )
+            MaterialUtils.make_materials_single_user(source_object)
 
     def ensure_source_materials_for_bake(self, context):
         source_objects = self._temporary_source_objects()
