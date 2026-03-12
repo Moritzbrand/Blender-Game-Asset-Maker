@@ -38,3 +38,5 @@ class WorkflowState:
     bake_margin: int = 1
     resolved_cage_extrusion: float = 0.0
     temporary_source_materials: list[dict[str, str]] = field(default_factory=list)
+    temporary_texture_anchor_names: list[str] = field(default_factory=list)
+    temporary_texture_material_names: list[str] = field(default_factory=list)
