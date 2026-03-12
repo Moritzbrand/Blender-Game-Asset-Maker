@@ -23,9 +23,6 @@ class WorkflowStepFactory:
             self._add(steps, "Preparing Source Materials", "Assigning temporary standard materials to source faces that have no material.", self.services.ensure_source_materials_for_bake, 1)
             self._add(steps, "Preparing Bake Visibility", "Hiding unrelated objects from render during baking.", self.services.prepare_bake_visibility, 1)
 
-            if self._has_emit_channels(scene):
-                self._add(steps, "Preparing Emit Source Materials", "Making source materials single-user for emit-based bakes.", self.services.make_source_materials_single_user, 1)
-
             self._add(steps, "Resolving Cage Extrusion", "Calculating the cage extrusion distance used for bake ray casting.", self.services.resolve_bake_extrusion, 1)
 
             if scene.gameready_bake_normal:
