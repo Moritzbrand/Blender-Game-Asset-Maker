@@ -3,6 +3,7 @@
 import os
 
 import bpy
+from mathutils import Matrix, Vector
 
 from .image_utils import ImageUtils
 
@@ -18,6 +19,7 @@ class MaterialUtils:
     }
 
     RISKY_TEXCOORD_OUTPUT_NAMES = {"Normal", "Generated", "Object"}
+    TEXCOORD_COMPENSATION_NODE_PREFIX = "GR_TexCoordComp_"
 
     @staticmethod
     def _refresh_material_preview(material, context=None):
@@ -947,6 +949,12 @@ class MaterialUtils:
                 continue
             obj.material_slots[slot_index].material = replacement_material
 
+        MaterialUtils.apply_texcoord_compensation_for_bake_channels(
+            obj=obj,
+            original_object=bake_object,
+            bake_channels=bake_channels,
+        )
+
         return replacement_map
 
     @staticmethod
@@ -1158,3 +1166,205 @@ class MaterialUtils:
 
         object_reference = getattr(texcoord_node, "object", None)
         return object_reference is None or object_reference == bake_object
+
+    @staticmethod
+    def _safe_component(value, fallback=1.0):
+        return value if abs(value) > 1e-8 else fallback
+
+    @staticmethod
+    def _scale_matrix(scale_vector):
+        return Matrix((
+            (scale_vector[0], 0.0, 0.0, 0.0),
+            (0.0, scale_vector[1], 0.0, 0.0),
+            (0.0, 0.0, scale_vector[2], 0.0),
+            (0.0, 0.0, 0.0, 1.0),
+        ))
+
+    @staticmethod
+    def _evaluated_mesh_bounds_local(obj):
+        if obj is None or obj.type != 'MESH':
+            return None
+
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = None
+
+        try:
+            mesh = evaluated.to_mesh()
+            if mesh is None or len(mesh.vertices) == 0:
+                return None
+
+            minimum = Vector((float("inf"), float("inf"), float("inf")))
+            maximum = Vector((float("-inf"), float("-inf"), float("-inf")))
+
+            for vertex in mesh.vertices:
+                coordinate = vertex.co
+                minimum.x = min(minimum.x, coordinate.x)
+                minimum.y = min(minimum.y, coordinate.y)
+                minimum.z = min(minimum.z, coordinate.z)
+                maximum.x = max(maximum.x, coordinate.x)
+                maximum.y = max(maximum.y, coordinate.y)
+                maximum.z = max(maximum.z, coordinate.z)
+
+            return minimum, maximum
+        except Exception:
+            return None
+        finally:
+            if mesh is not None:
+                evaluated.to_mesh_clear()
+
+    @staticmethod
+    def _build_generated_compensation_matrix(original_object, final_object, final_to_original_local):
+        original_bounds = MaterialUtils._evaluated_mesh_bounds_local(original_object)
+        final_bounds = MaterialUtils._evaluated_mesh_bounds_local(final_object)
+        if original_bounds is None or final_bounds is None:
+            return final_to_original_local
+
+        original_min, original_max = original_bounds
+        final_min, final_max = final_bounds
+
+        original_size = Vector((
+            MaterialUtils._safe_component(original_max.x - original_min.x),
+            MaterialUtils._safe_component(original_max.y - original_min.y),
+            MaterialUtils._safe_component(original_max.z - original_min.z),
+        ))
+        final_size = Vector((
+            MaterialUtils._safe_component(final_max.x - final_min.x),
+            MaterialUtils._safe_component(final_max.y - final_min.y),
+            MaterialUtils._safe_component(final_max.z - final_min.z),
+        ))
+
+        normalize_original = (
+            MaterialUtils._scale_matrix(Vector((1.0 / original_size.x, 1.0 / original_size.y, 1.0 / original_size.z)))
+            @ Matrix.Translation(-original_min)
+        )
+        denormalize_final = Matrix.Translation(final_min) @ MaterialUtils._scale_matrix(final_size)
+
+        return normalize_original @ final_to_original_local @ denormalize_final
+
+    @staticmethod
+    def _decompose_mapping_components(matrix):
+        location, rotation, scale = matrix.decompose()
+        return tuple(location), tuple(rotation.to_euler('XYZ')), tuple(scale)
+
+    @staticmethod
+    def _insert_mapping_after_texcoord_output(node_tree, texcoord_node, output_socket, location, rotation, scale):
+        links = node_tree.links
+        target_links = list(output_socket.links)
+        if not target_links:
+            return False
+
+        existing_comp_nodes = []
+        for link in target_links:
+            to_node = link.to_node
+            if to_node is None:
+                continue
+            if to_node.bl_idname != "ShaderNodeMapping":
+                continue
+            if str(getattr(to_node, "name", "")).startswith(MaterialUtils.TEXCOORD_COMPENSATION_NODE_PREFIX):
+                existing_comp_nodes.append(to_node)
+
+        for mapping_node in existing_comp_nodes:
+            for output in mapping_node.outputs:
+                for mapping_link in list(output.links):
+                    links.remove(mapping_link)
+            for input_socket in mapping_node.inputs:
+                for mapping_link in list(input_socket.links):
+                    links.remove(mapping_link)
+            node_tree.nodes.remove(mapping_node)
+
+        target_links = list(output_socket.links)
+        if not target_links:
+            return False
+
+        mapping_node = node_tree.nodes.new("ShaderNodeMapping")
+        mapping_node.name = f"{MaterialUtils.TEXCOORD_COMPENSATION_NODE_PREFIX}{output_socket.name}"
+        mapping_node.label = f"GR TexCoord Compensation ({output_socket.name})"
+        mapping_node.vector_type = 'POINT'
+        mapping_node.location = (texcoord_node.location.x + 220, texcoord_node.location.y)
+
+        mapping_node.inputs["Location"].default_value = location
+        mapping_node.inputs["Rotation"].default_value = rotation
+        mapping_node.inputs["Scale"].default_value = scale
+
+        for link in list(target_links):
+            to_node = link.to_node
+            to_socket = link.to_socket
+            links.remove(link)
+            links.new(mapping_node.outputs["Vector"], to_socket)
+
+        links.new(output_socket, mapping_node.inputs["Vector"])
+        return True
+
+    @staticmethod
+    def apply_texcoord_compensation_for_bake_channels(obj, original_object, bake_channels):
+        if obj is None or obj.type != 'MESH' or original_object is None:
+            return 0
+
+        normalized_bake_channels = {
+            str(channel).upper()
+            for channel in bake_channels or []
+            if str(channel).upper() in MaterialUtils.EMIT_CHANNEL_TO_PRINCIPLED_INPUT_NAMES
+        }
+        if not normalized_bake_channels:
+            return 0
+
+        final_to_original_local = original_object.matrix_world.inverted() @ obj.matrix_world
+
+        transformed_material_count = 0
+        seen_materials = set()
+
+        for slot in obj.material_slots:
+            material = slot.material
+            if material is None or not material.use_nodes or material.node_tree is None:
+                continue
+
+            material_key = material.as_pointer()
+            if material_key in seen_materials:
+                continue
+            seen_materials.add(material_key)
+
+            if not MaterialUtils._material_uses_risky_texcoord_for_bake_channels(
+                material=material,
+                bake_channels=normalized_bake_channels,
+                bake_object=original_object,
+            ):
+                continue
+
+            inserted_mapping = False
+            for node in list(material.node_tree.nodes):
+                if node.bl_idname != "ShaderNodeTexCoord":
+                    continue
+
+                for output_socket in node.outputs:
+                    if output_socket.name not in MaterialUtils.RISKY_TEXCOORD_OUTPUT_NAMES:
+                        continue
+                    if output_socket.name == "Object" and not MaterialUtils._is_risky_texcoord_output(
+                        node,
+                        output_socket,
+                        original_object,
+                    ):
+                        continue
+
+                    compensation_matrix = final_to_original_local.copy()
+                    if output_socket.name == "Generated":
+                        compensation_matrix = MaterialUtils._build_generated_compensation_matrix(
+                            original_object=original_object,
+                            final_object=obj,
+                            final_to_original_local=final_to_original_local,
+                        )
+
+                    location, rotation, scale = MaterialUtils._decompose_mapping_components(compensation_matrix)
+                    inserted_mapping |= MaterialUtils._insert_mapping_after_texcoord_output(
+                        node_tree=material.node_tree,
+                        texcoord_node=node,
+                        output_socket=output_socket,
+                        location=location,
+                        rotation=rotation,
+                        scale=scale,
+                    )
+
+            if inserted_mapping:
+                transformed_material_count += 1
+
+        return transformed_material_count
