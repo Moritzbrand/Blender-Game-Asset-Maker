@@ -100,7 +100,6 @@ class GameAssetWorkflowServices:
         )
         ObjectUtils.select_objects(context, source_objects)
         temporary_objects = ObjectUtils.duplicate_selected(context)
-        self.state.temporary_texture_anchor_names = MaterialUtils.prepare_texture_coordinate_anchors_for_objects(temporary_objects)
 
         if scene.gameready_apply_rot_scale:
             ObjectUtils.apply_transform_to_selected(context)
@@ -146,10 +145,6 @@ class GameAssetWorkflowServices:
         MeshUtils.remove_custom_normals(game_asset)
         self.state.game_asset_name = game_asset.name
         SelectionCoordinator.select_single(context, game_asset)
-
-    def cleanup_temporary_texture_coordinate_anchors(self, context):
-        MaterialUtils.remove_temporary_objects_by_name(self.state.temporary_texture_anchor_names)
-        self.state.temporary_texture_anchor_names = []
 
     def apply_shading(self, context):
         scene = context.scene
@@ -331,7 +326,6 @@ class GameAssetWorkflowServices:
 
     def finalize_scene(self, context):
         self.restore_source_materials_after_bake(context)
-        self.cleanup_temporary_texture_coordinate_anchors(context)
         game_asset = self.store.get_object(self.state.game_asset_name)
         temporary_object = self.store.get_object(self.state.temporary_object_name)
         SelectionCoordinator.select_single(context, game_asset)
@@ -351,10 +345,6 @@ class GameAssetWorkflowServices:
         except Exception:
             pass
         self.state.visibility_state = {}
-        try:
-            self.cleanup_temporary_texture_coordinate_anchors(context)
-        except Exception:
-            pass
         temporary_object = self.store.get_object(self.state.temporary_object_name)
         if temporary_object is None:
             return
