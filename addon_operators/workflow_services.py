@@ -5,6 +5,7 @@ import math
 import bpy
 
 from ..scripts.baking_utils import BakingUtils
+from ..scripts.debug_utils import DebugConsole
 from ..scripts.cycles_utils import CyclesUtils
 from ..scripts.export_utils import ExportUtils
 from ..scripts.image_utils import ImageUtils
@@ -185,12 +186,24 @@ class GameAssetWorkflowServices:
     def apply_shading(self, context):
         scene = context.scene
         game_asset = self.store.get_object(self.state.game_asset_name)
+        DebugConsole.log(
+            "SHADING_START",
+            (
+                f"target={getattr(game_asset, 'name', 'None')} | "
+                f"auto_smooth={scene.gameready_shade_auto_smooth} | "
+                f"angle={scene.gameready_auto_smooth_angle}"
+            ),
+            color="magenta",
+        )
         SelectionCoordinator.select_single(context, game_asset)
 
         if scene.gameready_shade_auto_smooth:
             bpy.ops.object.shade_auto_smooth(angle=math.radians(scene.gameready_auto_smooth_angle))
+            DebugConsole.log("SHADING_OP", "Executed bpy.ops.object.shade_auto_smooth", color="magenta")
             return
+
         bpy.ops.object.shade_flat()
+        DebugConsole.log("SHADING_OP", "Executed bpy.ops.object.shade_flat", color="magenta")
 
     def uv_unwrap(self, context):
         UVUtils.unwrap_object(context, self.store.get_object(self.state.game_asset_name))
