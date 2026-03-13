@@ -1,11 +1,13 @@
 # Purpose: uv utils module.
 # Example: import uv_utils
 import math
+
 import bpy
 
 
 class UVUtils:
     SMART_PROJECT_ANGLE_LIMIT = math.radians(72.0)
+    FAST_SMART_PROJECT_ANGLE_LIMIT = math.radians(80.0)
     SMART_PROJECT_ISLAND_MARGIN = 0.0
     SMART_PROJECT_AREA_WEIGHT = 0.0
     DEFAULT_PACK_MARGIN_PIXELS = 1.0
@@ -83,9 +85,17 @@ class UVUtils:
         return UVUtils._get_pack_margin_pixels(context) / float(texture_resolution)
 
     @staticmethod
+    def _is_fast_low_quality_enabled(context):
+        scene = getattr(context, "scene", None)
+        return bool(getattr(scene, "gameready_fast_low_quality", False))
+
+    @staticmethod
     def _unwrap_with_smart_project(context):
+        fast_low_quality = UVUtils._is_fast_low_quality_enabled(context)
+        angle_limit = UVUtils.FAST_SMART_PROJECT_ANGLE_LIMIT if fast_low_quality else UVUtils.SMART_PROJECT_ANGLE_LIMIT
+
         bpy.ops.uv.smart_project(
-            angle_limit=UVUtils.SMART_PROJECT_ANGLE_LIMIT,
+            angle_limit=angle_limit,
             margin_method='FRACTION',
             rotate_method='AXIS_ALIGNED_Y',
             island_margin=UVUtils.SMART_PROJECT_ISLAND_MARGIN,
@@ -96,12 +106,16 @@ class UVUtils:
 
         bpy.ops.uv.select_all(action='SELECT')
 
-        try:
-            bpy.ops.uv.average_islands_scale()
-        except Exception:
-            pass
+        if not fast_low_quality:
+            try:
+                bpy.ops.uv.average_islands_scale()
+            except Exception:
+                pass
 
-        UVUtils._pack_islands_dense(context)
+        if fast_low_quality:
+            UVUtils._pack_islands_fast(context)
+        else:
+            UVUtils._pack_islands_dense(context)
 
     @staticmethod
     def _pack_islands_dense(context):
@@ -126,6 +140,35 @@ class UVUtils:
         except Exception:
             pass
 
+        UVUtils._pack_islands_legacy(final_pack_margin)
+
+    @staticmethod
+    def _pack_islands_fast(context):
+        final_pack_margin = UVUtils._get_final_pack_margin(context)
+
+        try:
+            bpy.ops.uv.pack_islands(
+                udim_source='CLOSEST_UDIM',
+                rotate=True,
+                rotate_method='AXIS_ALIGNED',
+                scale=True,
+                merge_overlap=False,
+                margin_method='ADD',
+                margin=final_pack_margin,
+                pin=False,
+                pin_method='LOCKED',
+                shape_method='AABB',
+            )
+            return
+        except TypeError:
+            pass
+        except Exception:
+            pass
+
+        UVUtils._pack_islands_legacy(final_pack_margin)
+
+    @staticmethod
+    def _pack_islands_legacy(final_pack_margin):
         try:
             bpy.ops.uv.pack_islands(
                 rotate=True,
