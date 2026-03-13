@@ -2,6 +2,7 @@
 # Example: import create_game_asset_operator
 import bpy
 
+from ..scripts.debug_utils import DebugConsole
 from ..scripts.progress_utils import ProgressUtils
 from .create_asset_preconditions import CreateAssetPreconditions
 from .models import WorkflowState
@@ -75,16 +76,19 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
 
         current_step = self._steps.pop(0)
         self._announce_step(context, current_step)
+        step_started_at = DebugConsole.log_step_start(current_step.title, current_step.function)
 
         try:
             current_step.function(context)
         except Exception as exception:
+            DebugConsole.log("STEP_ERROR", f"{current_step.title} failed: {exception}", color="red")
             self._services.safe_cleanup(context)
             self._finish_modal(context)
             ProgressUtils.cancel(context, title="Failed", detail=f"{current_step.title} failed: {exception}")
             self.report({'ERROR'}, f"{current_step.title} failed: {exception}")
             return {'CANCELLED'}
 
+        DebugConsole.log_step_complete(current_step.title, step_started_at)
         self._completed_weight += current_step.weight
         ProgressUtils.update(
             context,
