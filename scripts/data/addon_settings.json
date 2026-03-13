@@ -29,5 +29,11 @@
     "obj": {
       "export_selected_objects": true
     }
+  },
+  "debug": {
+    "enabled": false,
+    "use_colors": true,
+    "timestamp_format": "%Y-%m-%d %H:%M:%S.%f",
+    "label": "GAME-ASSET-DEBUG"
   }
 }
