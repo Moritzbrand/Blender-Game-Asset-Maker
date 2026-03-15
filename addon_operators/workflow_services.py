@@ -132,10 +132,10 @@ class GameAssetWorkflowServices:
                 )
                 self.state.temporary_helper_object_names.extend(result.helper_object_names)
 
+        MeshUtils.apply_modifiers_to_selected(context)
+
         if scene.gameready_apply_rot_scale:
             ObjectUtils.apply_transform_to_selected(context)
-
-        MeshUtils.apply_modifiers_to_selected(context)
         temporary_object = MeshUtils.join_objects(context, temporary_objects)
         if temporary_object is None:
             self.state.temporary_object_name = ""
@@ -155,6 +155,8 @@ class GameAssetWorkflowServices:
 
         if not self._use_selected_to_active_mode(context) and scene.gameready_unsubdivide:
             MeshUtils.add_unsubdivide_to_objects(new_objects, scene.gameready_unsubdivide_iterations * 2)
+
+        MeshUtils.apply_modifiers_to_selected(context)
 
         if scene.gameready_apply_rot_scale:
             ObjectUtils.apply_transform_to_selected(context)
