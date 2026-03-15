@@ -17,15 +17,12 @@ class MaterialUtils:
     TEMP_COORD_MATERIAL_FLAG = "gameready_is_temp_coord_material"
 
     @staticmethod
-    def _refresh_material_preview(material, context=None):
-        if material is None or not material.use_nodes or material.node_tree is None:
-            return
+    def _get_active_material_output_node(node_tree):
+        if node_tree is None:
+            return None
 
-        node_tree = material.node_tree
         nodes = node_tree.nodes
-        links = node_tree.links
 
-        output_node = None
         try:
             output_node = node_tree.get_output_node("ALL")
         except Exception:
@@ -33,32 +30,62 @@ class MaterialUtils:
 
         if output_node is None:
             for node in nodes:
-                if node.bl_idname == "ShaderNodeOutputMaterial":
-                    if getattr(node, "is_active_output", False):
-                        output_node = node
-                        break
+                if node.bl_idname == "ShaderNodeOutputMaterial" and getattr(node, "is_active_output", False):
+                    return node
 
         if output_node is None:
             for node in nodes:
                 if node.bl_idname == "ShaderNodeOutputMaterial":
-                    output_node = node
-                    break
+                    return node
 
-        principled_bsdf_node = None
+        return output_node
+
+    @staticmethod
+    def _get_first_principled_bsdf_node(nodes):
         for node in nodes:
             if node.bl_idname == "ShaderNodeBsdfPrincipled":
-                principled_bsdf_node = node
-                break
+                return node
+        return None
+
+    @staticmethod
+    def _is_emit_bake_proxy_node(node):
+        if node is None:
+            return False
+        node_name = str(getattr(node, "name", ""))
+        return node_name.startswith("GR_EmitBakeProxy") or node_name.startswith("GR_EmitBakeHelper")
+
+    @staticmethod
+    def _remove_existing_emit_bake_proxy_nodes(nodes):
+        for node in list(nodes):
+            if MaterialUtils._is_emit_bake_proxy_node(node):
+                nodes.remove(node)
+
+    @staticmethod
+    def _restore_principled_surface_output_link(material, context=None, remove_emit_bake_proxy_nodes=False):
+        if material is None or not material.use_nodes or material.node_tree is None:
+            return False
+
+        node_tree = material.node_tree
+        nodes = node_tree.nodes
+        links = node_tree.links
+
+        if remove_emit_bake_proxy_nodes:
+            MaterialUtils._remove_existing_emit_bake_proxy_nodes(nodes)
+
+        output_node = MaterialUtils._get_active_material_output_node(node_tree)
+        principled_bsdf_node = MaterialUtils._get_first_principled_bsdf_node(nodes)
 
         if output_node is None or principled_bsdf_node is None:
-            return
+            return False
 
         surface_input = output_node.inputs.get("Surface")
         bsdf_output = principled_bsdf_node.outputs.get("BSDF")
 
-        if surface_input is not None and bsdf_output is not None:
-            MaterialUtils._remove_links_from_socket(links, surface_input)
-            links.new(bsdf_output, surface_input)
+        if surface_input is None or bsdf_output is None:
+            return False
+
+        MaterialUtils._remove_links_from_socket(links, surface_input)
+        links.new(bsdf_output, surface_input)
 
         try:
             node_tree.update()
@@ -81,8 +108,18 @@ class MaterialUtils:
             except Exception:
                 pass
 
+        return True
+
     @staticmethod
-    def refresh_material_preview_on_object(obj, context=None):
+    def _refresh_material_preview(material, context=None, remove_emit_bake_proxy_nodes=False):
+        MaterialUtils._restore_principled_surface_output_link(
+            material,
+            context=context,
+            remove_emit_bake_proxy_nodes=remove_emit_bake_proxy_nodes,
+        )
+
+    @staticmethod
+    def refresh_material_preview_on_object(obj, context=None, remove_emit_bake_proxy_nodes=False):
         if obj is None or obj.type != 'MESH':
             return 0
 
@@ -99,57 +136,21 @@ class MaterialUtils:
                 continue
             seen_material_pointers.add(material_pointer)
 
-            MaterialUtils._refresh_material_preview(material, context=context)
+            MaterialUtils._refresh_material_preview(
+                material,
+                context=context,
+                remove_emit_bake_proxy_nodes=remove_emit_bake_proxy_nodes,
+            )
             refreshed_count += 1
 
         return refreshed_count
 
     @staticmethod
-    def _refresh_material_output(material):
-        if material is None or not material.use_nodes or material.node_tree is None:
-            return
-
-        nodes = material.node_tree.nodes
-        links = material.node_tree.links
-
-        output_node = None
-        principled_bsdf_node = None
-
-        for node in nodes:
-            if output_node is None and node.bl_idname == "ShaderNodeOutputMaterial":
-                if getattr(node, "is_active_output", False):
-                    output_node = node
-
-            if principled_bsdf_node is None and node.bl_idname == "ShaderNodeBsdfPrincipled":
-                principled_bsdf_node = node
-
-        if output_node is None:
-            for node in nodes:
-                if node.bl_idname == "ShaderNodeOutputMaterial":
-                    output_node = node
-                    break
-
-        if output_node is None or principled_bsdf_node is None:
-            return
-
-        surface_input = output_node.inputs.get("Surface")
-        bsdf_output = principled_bsdf_node.outputs.get("BSDF")
-
-        if surface_input is None or bsdf_output is None:
-            return
-
-        MaterialUtils._remove_links_from_socket(links, surface_input)
-        links.new(bsdf_output, surface_input)
-
-        try:
-            material.node_tree.update_tag()
-        except Exception:
-            pass
-
-        try:
-            material.update_tag(refresh={'DATA'})
-        except Exception:
-            pass
+    def _refresh_material_output(material, remove_emit_bake_proxy_nodes=False):
+        MaterialUtils._restore_principled_surface_output_link(
+            material,
+            remove_emit_bake_proxy_nodes=remove_emit_bake_proxy_nodes,
+        )
     @staticmethod
     def _node_has_any_linked_output(node):
         for socket in node.outputs:
