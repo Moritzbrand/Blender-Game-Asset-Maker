@@ -178,6 +178,14 @@ class GameAssetWorkflowServices:
         game_asset.name = f"{self.state.source_object_name}_game"
         self._set_object_origin_world_location(context, game_asset, final_origin_location)
 
+        if scene.gameready_apply_rot_scale:
+            ObjectUtils.apply_transform_to_object(
+                context,
+                game_asset,
+                apply_rotation=True,
+                apply_scale=True,
+            )
+
         if not self._use_selected_to_active_mode(context) and scene.gameready_merge_by_distance:
             MeshUtils.merge_by_distance(context, game_asset, scene.gameready_merge_distance)
         if not self._use_selected_to_active_mode(context) and scene.gameready_collapse:

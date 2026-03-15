@@ -365,26 +365,51 @@ class MeshUtils:
         if context.mode != 'OBJECT':
             bpy.ops.object.mode_set(mode='OBJECT')
 
-        selected_mesh_objects = [obj for obj in context.selected_objects if obj.type == 'MESH']
+        selected_object_names = [obj.name for obj in context.selected_objects]
+        active_object = context.view_layer.objects.active
+        active_object_name = active_object.name if active_object is not None else ""
 
-        for obj in selected_mesh_objects:
-            for other in context.selected_objects:
+        selected_mesh_objects = [
+            obj
+            for obj in (bpy.data.objects.get(name) for name in selected_object_names)
+            if obj is not None and obj.type == 'MESH'
+        ]
+
+        try:
+            for obj in selected_mesh_objects:
+                for other in list(context.selected_objects):
+                    other.select_set(False)
+
+                obj.select_set(True)
+                context.view_layer.objects.active = obj
+
+                modifier_names = [mod.name for mod in obj.modifiers]
+
+                for mod_name in modifier_names:
+                    if mod_name not in obj.modifiers:
+                        continue
+
+                    override = context.copy()
+                    override["active_object"] = obj
+                    override["object"] = obj
+                    override["selected_objects"] = [obj]
+                    override["selected_editable_objects"] = [obj]
+
+                    with context.temp_override(**override):
+                        bpy.ops.object.modifier_apply(modifier=mod_name)
+        finally:
+            for other in list(context.selected_objects):
                 other.select_set(False)
 
-            obj.select_set(True)
-            context.view_layer.objects.active = obj
-
-            modifier_names = [mod.name for mod in obj.modifiers]
-
-            for mod_name in modifier_names:
-                if mod_name not in obj.modifiers:
+            restored_objects = []
+            for name in selected_object_names:
+                obj = bpy.data.objects.get(name)
+                if obj is None:
                     continue
+                obj.select_set(True)
+                restored_objects.append(obj)
 
-                override = context.copy()
-                override["active_object"] = obj
-                override["object"] = obj
-                override["selected_objects"] = [obj]
-                override["selected_editable_objects"] = [obj]
-
-                with context.temp_override(**override):
-                    bpy.ops.object.modifier_apply(modifier=mod_name)
+            restored_active = bpy.data.objects.get(active_object_name) if active_object_name else None
+            if restored_active is None and restored_objects:
+                restored_active = restored_objects[0]
+            context.view_layer.objects.active = restored_active

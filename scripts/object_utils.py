@@ -62,6 +62,23 @@ class ObjectUtils:
         )
 
     @staticmethod
+    def apply_transform_to_object(context, obj, apply_location=False, apply_rotation=True, apply_scale=True):
+        if obj is None:
+            return
+
+        for selected_obj in list(context.selected_objects):
+            selected_obj.select_set(False)
+
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+        ObjectUtils.apply_transform_to_selected(
+            context,
+            apply_location=apply_location,
+            apply_rotation=apply_rotation,
+            apply_scale=apply_scale,
+        )
+
+    @staticmethod
     def select_objects(context, objects):
         for obj in context.selected_objects:
             obj.select_set(False)
