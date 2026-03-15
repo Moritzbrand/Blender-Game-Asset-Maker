@@ -229,6 +229,81 @@ class MeshUtils:
         return MeshUtils.join_objects(context, floating_objects)
 
     @staticmethod
+    def get_triangle_count(obj):
+        if not MeshUtils._is_valid_mesh_object(obj):
+            return 0
+
+        mesh = obj.data
+        mesh.calc_loop_triangles()
+        return len(mesh.loop_triangles)
+
+    @staticmethod
+    def get_bounding_box_surface_area(obj, epsilon=1e-6):
+        if not MeshUtils._is_valid_mesh_object(obj):
+            return epsilon
+
+        dimensions = obj.dimensions
+        x = max(abs(dimensions.x), 0.0)
+        y = max(abs(dimensions.y), 0.0)
+        z = max(abs(dimensions.z), 0.0)
+        surface_area = 2.0 * ((x * y) + (x * z) + (y * z))
+        return max(surface_area, epsilon)
+
+    @staticmethod
+    def get_triangle_density(obj, epsilon=1e-6):
+        triangle_count = MeshUtils.get_triangle_count(obj)
+        if triangle_count <= 0:
+            return 0.0
+
+        return triangle_count / MeshUtils.get_bounding_box_surface_area(obj, epsilon=epsilon)
+
+    @staticmethod
+    def _select_single_object(context, obj):
+        for other in context.selected_objects:
+            other.select_set(False)
+
+        obj.select_set(True)
+        context.view_layer.objects.active = obj
+
+    @staticmethod
+    def decimate_object_to_triangle_density(context, obj, max_density, minimum_ratio=0.01):
+        if obj is None or obj.type != 'MESH':
+            raise ValueError("Object must be a mesh")
+
+        triangle_count = MeshUtils.get_triangle_count(obj)
+        if triangle_count <= 0:
+            return False
+
+        surface_area = MeshUtils.get_bounding_box_surface_area(obj)
+        target_triangle_count = max(4.0, float(max_density) * surface_area)
+        ratio = max(minimum_ratio, min(1.0, target_triangle_count / float(triangle_count)))
+
+        if ratio >= 0.9999:
+            return False
+
+        MeshUtils.decimate_collapse(obj, ratio=ratio, apply_modifier=True, context=context)
+        return True
+
+    @staticmethod
+    def limit_triangle_density_on_objects(context, objects, max_density):
+        if max_density <= 0.0:
+            return []
+
+        changed_objects = []
+        for obj in objects:
+            if not MeshUtils._is_valid_mesh_object(obj):
+                continue
+            if MeshUtils.get_triangle_density(obj) <= max_density:
+                continue
+            if MeshUtils.decimate_object_to_triangle_density(context, obj, max_density):
+                changed_objects.append(obj)
+
+        if changed_objects:
+            MeshUtils._select_single_object(context, changed_objects[0])
+
+        return changed_objects
+
+    @staticmethod
     def decimate_planar(obj, angle_degrees=5.0, apply_modifier=True, context=None):
         if obj is None or obj.type != 'MESH':
             raise ValueError("Object must be a mesh")

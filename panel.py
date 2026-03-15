@@ -194,6 +194,11 @@ class GAMEREADY_PT_settings_panel(GAMEREADY_PT_panel_base):
         sub_merge.enabled = scene.gameready_merge_by_distance and not scene.gameready_bake_selected_to_active
         sub_merge.prop(scene, "gameready_merge_distance")
 
+        mesh_options_box.prop(scene, "gameready_average_triangle_density")
+        density_column = mesh_options_box.column()
+        density_column.enabled = scene.gameready_average_triangle_density and not scene.gameready_bake_selected_to_active
+        density_column.prop(scene, "gameready_max_triangle_density", slider=True)
+
         mesh_options_box.prop(scene, "gameready_collapse")
         sub_collapse = mesh_options_box.column()
         sub_collapse.enabled = scene.gameready_collapse and not scene.gameready_bake_selected_to_active

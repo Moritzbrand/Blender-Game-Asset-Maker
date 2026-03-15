@@ -37,6 +37,8 @@ SCENE_PROPERTIES = [
     BoolSceneProperty("gameready_apply_rot_scale", "Apply Rotation & Scale", "Apply rotation and scale before creating the game asset", True),
     BoolSceneProperty("gameready_merge_by_distance", "Merge by Distance", "Remove duplicate vertices within a certain distance to optimize the mesh for game engines", True),
     FloatSceneProperty("gameready_merge_distance", "Merge Distance", "Distance threshold for merging vertices when 'Merge by Distance' is enabled", default=0.0001, min=0.0, max=0.1),
+    BoolSceneProperty("gameready_average_triangle_density", "Average Out Triangle Density", "Decimate overly dense source-object copies before union so sparse areas keep more of their shape", False),
+    FloatSceneProperty("gameready_max_triangle_density", "Max Triangle Density", "Maximum allowed triangle density in triangles per square Blender unit of bounding-box surface area before pre-union decimation kicks in", default=1000.0, min=0.1, max=100000.0),
     BoolSceneProperty("gameready_unsubdivide", "Unsubdivide", "Unsubdivide the mesh of the new game asset", False),
     IntSceneProperty("gameready_unsubdivide_iterations", "Unsubdivide Iterations", "Number of iterations to perform when unsubdividing the mesh", default=1, min=1, max=4),
     BoolSceneProperty("gameready_collapse", "Collapse", "Collapse the mesh of the new game asset", False),

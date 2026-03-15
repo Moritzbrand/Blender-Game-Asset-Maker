@@ -160,6 +160,12 @@ class GameAssetWorkflowServices:
             ObjectUtils.apply_transform_to_selected(context)
 
         MeshUtils.apply_modifiers_to_selected(context)
+        if not self._use_selected_to_active_mode(context) and scene.gameready_average_triangle_density:
+            MeshUtils.limit_triangle_density_on_objects(
+                context,
+                new_objects,
+                max_density=scene.gameready_max_triangle_density,
+            )
         if self._use_selected_to_active_mode(context):
             game_asset = MeshUtils.join_objects(context, new_objects)
         else:
@@ -292,24 +298,7 @@ class GameAssetWorkflowServices:
         temporary_object = self.store.get_object(self.state.temporary_object_name)
         source_object = temporary_object or self.store.get_object(self.state.game_asset_name)
         BakingUtils.prepare_object_materials_for_emit_bake(source_object, material_channel)
-
-        try:
-            self._bake_selected_to_active(context, image_key, bake_mode="EMIT")
-        finally:
-            if source_object is not None:
-                MaterialUtils.refresh_material_preview_on_object(
-                    source_object,
-                    context=context,
-                    remove_emit_bake_proxy_nodes=True,
-                )
-
-            game_asset = self.store.get_object(self.state.game_asset_name)
-            if game_asset is not None and game_asset != source_object:
-                MaterialUtils.refresh_material_preview_on_object(
-                    game_asset,
-                    context=context,
-                    remove_emit_bake_proxy_nodes=True,
-                )
+        self._bake_selected_to_active(context, image_key, bake_mode="EMIT")
 
     def _bake_selected_to_active(self, context, image_key: str, bake_mode: str):
         bake_call = (
@@ -370,11 +359,6 @@ class GameAssetWorkflowServices:
     def restore_blender_normal_preview(self, context):
         game_asset = self.store.get_object(self.state.game_asset_name)
         if game_asset is not None:
-            MaterialUtils.refresh_material_preview_on_object(
-                game_asset,
-                context=context,
-                remove_emit_bake_proxy_nodes=True,
-            )
             MaterialUtils.apply_normal_y_display_fix_to_object(game_asset)
             MaterialUtils.refresh_material_preview_on_object(game_asset, context=context)
 
@@ -382,11 +366,6 @@ class GameAssetWorkflowServices:
         game_asset = self.store.get_object(self.state.game_asset_name)
         if game_asset is None:
             return
-        MaterialUtils.refresh_material_preview_on_object(
-            game_asset,
-            context=context,
-            remove_emit_bake_proxy_nodes=True,
-        )
         MaterialUtils.apply_sss_preview_to_object(
             obj=game_asset,
             image=self.store.get_created_image("sss"),
@@ -412,11 +391,7 @@ class GameAssetWorkflowServices:
         temporary_object = self.store.get_object(self.state.temporary_object_name)
         SelectionCoordinator.select_single(context, game_asset)
         if game_asset is not None:
-            MaterialUtils.refresh_material_preview_on_object(
-                game_asset,
-                context=context,
-                remove_emit_bake_proxy_nodes=True,
-            )
+            MaterialUtils.refresh_material_preview_on_object(game_asset, context=context)
         if temporary_object is not None:
             bpy.data.objects.remove(temporary_object, do_unlink=True)
             self.state.temporary_object_name = ""
