@@ -112,6 +112,19 @@ class GameAssetWorkflowServices:
             cursor.matrix = previous_cursor_matrix
 
 
+    def _apply_rotation_scale_to_object(self, context, obj):
+        if obj is None:
+            return
+
+        SelectionCoordinator.select_single(context, obj)
+        ObjectUtils.apply_transform_to_selected(
+            context,
+            apply_location=False,
+            apply_rotation=True,
+            apply_scale=True,
+        )
+
+
     def prepare_temporary_source(self, context):
         scene = context.scene
         source_objects = (
@@ -156,8 +169,6 @@ class GameAssetWorkflowServices:
         if not self._use_selected_to_active_mode(context) and scene.gameready_unsubdivide:
             MeshUtils.add_unsubdivide_to_objects(new_objects, scene.gameready_unsubdivide_iterations * 2)
 
-        MeshUtils.apply_modifiers_to_selected(context)
-
         if scene.gameready_apply_rot_scale:
             ObjectUtils.apply_transform_to_selected(context)
 
@@ -177,6 +188,9 @@ class GameAssetWorkflowServices:
 
         game_asset.name = f"{self.state.source_object_name}_game"
         self._set_object_origin_world_location(context, game_asset, final_origin_location)
+
+        if scene.gameready_apply_rot_scale:
+            self._apply_rotation_scale_to_object(context, game_asset)
 
         if not self._use_selected_to_active_mode(context) and scene.gameready_merge_by_distance:
             MeshUtils.merge_by_distance(context, game_asset, scene.gameready_merge_distance)
