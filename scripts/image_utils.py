@@ -1,5 +1,7 @@
 # Purpose: image utils module.
 # Example: import image_utils
+import os
+
 import bpy
 
 
@@ -8,6 +10,99 @@ class ImageUtils:
     def require_image(cls, image, argument_name):
         if image is None:
             raise ValueError(f"{argument_name} is required")
+
+    @classmethod
+    def _resolve_image_filepath(cls, image):
+        try:
+            filepath = str(getattr(image, "filepath_raw", "") or getattr(image, "filepath", "") or "").strip()
+        except Exception:
+            return ""
+
+        if not filepath:
+            return ""
+
+        try:
+            return bpy.path.abspath(filepath)
+        except Exception:
+            return filepath
+
+    @classmethod
+    def sync_image_file_settings(cls, image):
+        filepath = cls._resolve_image_filepath(image)
+        if not filepath:
+            return ""
+
+        try:
+            image.filepath_raw = filepath
+        except Exception:
+            pass
+
+        try:
+            image.filepath = filepath
+        except Exception:
+            pass
+
+        return filepath
+
+    @classmethod
+    def refresh_image_from_disk(cls, image):
+        cls.require_image(image, "image")
+
+        filepath = cls.sync_image_file_settings(image)
+        if not filepath or not os.path.exists(filepath):
+            try:
+                image.update()
+            except Exception:
+                pass
+            return False
+
+        try:
+            if getattr(image, "source", None) != 'FILE':
+                image.source = 'FILE'
+        except Exception:
+            pass
+
+        try:
+            image.reload()
+            image.update()
+            return True
+        except Exception:
+            pass
+
+        try:
+            disk_image = bpy.data.images.load(filepath, check_existing=False)
+        except Exception:
+            disk_image = None
+
+        if disk_image is None:
+            try:
+                image.update()
+            except Exception:
+                pass
+            return False
+
+        try:
+            disk_size = tuple(disk_image.size)
+            current_size = tuple(image.size)
+            if disk_size and disk_size != current_size:
+                image.scale(disk_size[0], disk_size[1])
+
+            image.pixels[:] = disk_image.pixels[:]
+            image.update()
+
+            try:
+                image.colorspace_settings.name = disk_image.colorspace_settings.name
+            except Exception:
+                pass
+
+            return True
+        except Exception:
+            return False
+        finally:
+            try:
+                bpy.data.images.remove(disk_image, do_unlink=True)
+            except Exception:
+                pass
 
     @classmethod
     def require_matching_image_sizes(cls, images, error_message):
@@ -62,11 +157,8 @@ class ImageUtils:
 
     @classmethod
     def save_image_if_possible(cls, image, scene=None):
-        try:
-            filepath = getattr(image, "filepath_raw", "") or getattr(image, "filepath", "")
-            if not filepath:
-                return
-        except Exception:
+        filepath = cls.sync_image_file_settings(image)
+        if not filepath:
             return
 
         scene = scene or getattr(bpy.context, "scene", None)
@@ -75,6 +167,8 @@ class ImageUtils:
                 image.save()
             except Exception:
                 pass
+            finally:
+                cls.refresh_image_from_disk(image)
             return
 
         settings = scene.render.image_settings
@@ -123,6 +217,8 @@ class ImageUtils:
                 settings.color_management = backup["color_management"]
             except Exception:
                 pass
+
+        cls.refresh_image_from_disk(image)
 
     @classmethod
     def write_pixels_to_image(cls, image, image_pixels, scene=None):

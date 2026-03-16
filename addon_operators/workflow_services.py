@@ -1,12 +1,13 @@
 # Purpose: workflow services module.
 # Example: import workflow_services
+
 import math
 
 import bpy
 
 from ..scripts.baking_utils import BakingUtils
-from ..scripts.debug_utils import DebugConsole
 from ..scripts.cycles_utils import CyclesUtils
+from ..scripts.debug_utils import DebugConsole
 from ..scripts.export_utils import ExportUtils
 from ..scripts.image_utils import ImageUtils
 from ..scripts.material_utils import MaterialUtils
@@ -52,7 +53,8 @@ class SelectionCoordinator:
 
         if obj is not None:
             obj.select_set(True)
-            context.view_layer.objects.active = obj
+
+        context.view_layer.objects.active = obj
 
 
 class GameAssetWorkflowServices:
@@ -76,6 +78,7 @@ class GameAssetWorkflowServices:
 
     def _objects_for_game_asset_build(self, context):
         active_object = self._active_source_object()
+
         if self._use_selected_to_active_mode(context):
             return [active_object] if active_object is not None else []
 
@@ -96,6 +99,7 @@ class GameAssetWorkflowServices:
             for image_key, image in created_images.items()
             if image is not None
         }
+
     def _set_object_origin_world_location(self, context, obj, world_location):
         if obj is None or world_location is None:
             return
@@ -107,10 +111,135 @@ class GameAssetWorkflowServices:
         try:
             cursor.location = world_location
             SelectionCoordinator.select_single(context, obj)
-            bpy.ops.object.origin_set(type='ORIGIN_CURSOR', center='MEDIAN')
+            bpy.ops.object.origin_set(type="ORIGIN_CURSOR", center="MEDIAN")
         finally:
             cursor.matrix = previous_cursor_matrix
 
+    def _make_object_materials_single_user(self, obj):
+        if obj is None or getattr(obj, "type", None) != "MESH":
+            return
+
+        material_slots = getattr(obj, "material_slots", None)
+        if not material_slots:
+            return
+
+        for slot_index, slot in enumerate(material_slots):
+            material = getattr(slot, "material", None)
+            if material is None:
+                continue
+
+            try:
+                obj.material_slots[slot_index].material = material.copy()
+            except Exception:
+                try:
+                    obj.data.materials[slot_index] = material.copy()
+                except Exception:
+                    pass
+
+    def _make_materials_single_user(self, objects):
+        for obj in objects or []:
+            self._make_object_materials_single_user(obj)
+
+    def _refresh_image_node(self, node):
+        image = getattr(node, "image", None)
+        if image is None:
+            return
+
+        try:
+            refreshed_from_disk = ImageUtils.refresh_image_from_disk(image)
+        except Exception:
+            refreshed_from_disk = False
+
+        if refreshed_from_disk:
+            return
+
+        try:
+            image.update()
+        except Exception:
+            pass
+
+    def _refresh_material_output_links(self, material):
+        if material is None or not getattr(material, "use_nodes", False):
+            return
+
+        node_tree = material.node_tree
+        if node_tree is None:
+            return
+
+        nodes = node_tree.nodes
+        links = node_tree.links
+
+        output_node = next(
+            (
+                node
+                for node in nodes
+                if getattr(node, "type", "") == "OUTPUT_MATERIAL"
+                and getattr(node, "is_active_output", True)
+            ),
+            None,
+        )
+        if output_node is None:
+            return
+
+        surface_input = output_node.inputs.get("Surface")
+        if surface_input is None:
+            return
+
+        for node in nodes:
+            if getattr(node, "type", "") == "TEX_IMAGE":
+                self._refresh_image_node(node)
+
+        source_socket = None
+        if surface_input.is_linked and surface_input.links:
+            existing_link = surface_input.links[0]
+            source_socket = existing_link.from_socket
+            try:
+                links.remove(existing_link)
+            except Exception:
+                source_socket = None
+
+        if source_socket is None:
+            principled_node = next(
+                (node for node in nodes if getattr(node, "type", "") == "BSDF_PRINCIPLED"),
+                None,
+            )
+            if principled_node is not None:
+                source_socket = principled_node.outputs.get("BSDF")
+
+        if source_socket is not None:
+            try:
+                links.new(source_socket, surface_input)
+            except Exception:
+                pass
+
+        try:
+            node_tree.update_tag()
+        except Exception:
+            pass
+
+        try:
+            material.update_tag()
+        except Exception:
+            pass
+
+    def _refresh_baked_material_display(self, obj, context=None):
+        if obj is None:
+            return
+
+        for material_slot in getattr(obj, "material_slots", []):
+            self._refresh_material_output_links(getattr(material_slot, "material", None))
+
+        try:
+            if getattr(obj, "data", None) is not None:
+                obj.data.update()
+        except Exception:
+            pass
+
+        if context is not None:
+            try:
+                context.view_layer.update()
+            except Exception:
+                pass
 
     def prepare_temporary_source(self, context):
         scene = context.scene
@@ -119,8 +248,14 @@ class GameAssetWorkflowServices:
             if self._use_selected_to_active_mode(context)
             else self.store.selected_objects()
         )
+
         ObjectUtils.select_objects(context, source_objects)
         temporary_objects = ObjectUtils.duplicate_selected(context)
+
+        # Important: duplicated objects still share the original material datablocks.
+        # Make every temporary copy single-user before any bake preparation mutates its
+        # node tree, so the original source materials stay completely untouched.
+        self._make_materials_single_user(temporary_objects)
 
         self.state.temporary_helper_object_names = []
         if scene.gameready_bake_textures:
@@ -136,10 +271,12 @@ class GameAssetWorkflowServices:
 
         if scene.gameready_apply_rot_scale:
             ObjectUtils.apply_transform_to_selected(context)
+
         temporary_object = MeshUtils.join_objects(context, temporary_objects)
         if temporary_object is None:
             self.state.temporary_object_name = ""
             return
+
         temporary_object.name = f"{self.state.source_object_name}_temp"
         self.state.temporary_object_name = temporary_object.name
 
@@ -147,6 +284,7 @@ class GameAssetWorkflowServices:
         scene = context.scene
         active_source_object = self._active_source_object()
         final_origin_location = None
+
         if active_source_object is not None:
             final_origin_location = active_source_object.matrix_world.translation.copy()
 
@@ -154,7 +292,10 @@ class GameAssetWorkflowServices:
         new_objects = ObjectUtils.duplicate_selected(context)
 
         if not self._use_selected_to_active_mode(context) and scene.gameready_unsubdivide:
-            MeshUtils.add_unsubdivide_to_objects(new_objects, scene.gameready_unsubdivide_iterations * 2)
+            MeshUtils.add_unsubdivide_to_objects(
+                new_objects,
+                scene.gameready_unsubdivide_iterations * 2,
+            )
 
         MeshUtils.apply_modifiers_to_selected(context)
 
@@ -162,36 +303,40 @@ class GameAssetWorkflowServices:
             ObjectUtils.apply_transform_to_selected(context)
 
         MeshUtils.apply_modifiers_to_selected(context)
-        if not self._use_selected_to_active_mode(context) and scene.gameready_average_triangle_density:
+
+        if (
+            not self._use_selected_to_active_mode(context)
+            and scene.gameready_average_triangle_density
+        ):
             MeshUtils.limit_triangle_density_on_objects(
                 context,
                 new_objects,
                 max_density=scene.gameready_max_triangle_density,
             )
+
         if self._use_selected_to_active_mode(context):
             game_asset = MeshUtils.join_objects(context, new_objects)
         else:
             game_asset = MeshUtils.union(context, new_objects)
+
         if game_asset is None:
             raise ValueError("Could not create game asset mesh from current selection")
 
         game_asset.name = f"{self.state.source_object_name}_game"
         self._set_object_origin_world_location(context, game_asset, final_origin_location)
 
-        if scene.gameready_apply_rot_scale:
-            ObjectUtils.apply_transform_to_object(
-                context,
-                game_asset,
-                apply_rotation=True,
-                apply_scale=True,
-            )
-
         if not self._use_selected_to_active_mode(context) and scene.gameready_merge_by_distance:
             MeshUtils.merge_by_distance(context, game_asset, scene.gameready_merge_distance)
+
         if not self._use_selected_to_active_mode(context) and scene.gameready_collapse:
             MeshUtils.decimate_collapse(game_asset, scene.gameready_collapse_ratio)
-        if not self._use_selected_to_active_mode(context) and scene.gameready_remove_planar_vertices:
+
+        if (
+            not self._use_selected_to_active_mode(context)
+            and scene.gameready_remove_planar_vertices
+        ):
             MeshUtils.decimate_planar(game_asset, scene.gameready_planar_angle_limit)
+
         if scene.gameready_triangulate:
             MeshUtils.triangulate_object(game_asset)
 
@@ -202,6 +347,7 @@ class GameAssetWorkflowServices:
     def apply_shading(self, context):
         scene = context.scene
         game_asset = self.store.get_object(self.state.game_asset_name)
+
         DebugConsole.log(
             "SHADING_START",
             (
@@ -211,11 +357,18 @@ class GameAssetWorkflowServices:
             ),
             color="magenta",
         )
+
         SelectionCoordinator.select_single(context, game_asset)
 
         if scene.gameready_shade_auto_smooth:
-            bpy.ops.object.shade_auto_smooth(angle=math.radians(scene.gameready_auto_smooth_angle))
-            DebugConsole.log("SHADING_OP", "Executed bpy.ops.object.shade_auto_smooth", color="magenta")
+            bpy.ops.object.shade_auto_smooth(
+                angle=math.radians(scene.gameready_auto_smooth_angle)
+            )
+            DebugConsole.log(
+                "SHADING_OP",
+                "Executed bpy.ops.object.shade_auto_smooth",
+                color="magenta",
+            )
             return
 
         bpy.ops.object.shade_flat()
@@ -227,18 +380,24 @@ class GameAssetWorkflowServices:
     def prepare_bake_setup(self, context):
         scene = context.scene
         game_asset = self.store.get_object(self.state.game_asset_name)
+
         CyclesUtils.configure_cycles(scene, samples=scene.gameready_sample_count)
         _, created_images = MaterialUtils.setup_bake_material(game_asset, scene)
         self.store_created_images(created_images)
 
+        self._refresh_baked_material_display(game_asset, context=context)
+        MaterialUtils.refresh_material_preview_on_object(game_asset, context=context)
+
     def prepare_bake_visibility(self, context):
         temporary_object = self.store.get_object(self.state.temporary_object_name)
         game_asset = self.store.get_object(self.state.game_asset_name)
+
         objects_to_hide = [
             obj
             for obj in BakingUtils.get_all_rendered_objects(context)
             if obj not in {temporary_object, game_asset}
         ]
+
         self.state.visibility_state = BakingUtils.store_render_visibility(objects_to_hide)
         BakingUtils.hide_from_render(objects_to_hide)
 
@@ -251,14 +410,19 @@ class GameAssetWorkflowServices:
             self.state.temporary_source_materials = []
             return
 
-        self.state.temporary_source_materials = MaterialUtils.ensure_standard_material_on_empty_slots(source_object)
+        self.state.temporary_source_materials = MaterialUtils.ensure_standard_material_on_empty_slots(
+            source_object
+        )
 
     def restore_source_materials_after_bake(self, context):
         source_object = self.store.get_object(self.state.temporary_object_name)
         if source_object is None:
             source_object = self.store.get_object(self.state.game_asset_name)
 
-        MaterialUtils.remove_temporary_material_assignments(source_object, self.state.temporary_source_materials)
+        MaterialUtils.remove_temporary_material_assignments(
+            source_object,
+            self.state.temporary_source_materials,
+        )
         self.state.temporary_source_materials = []
 
     def resolve_bake_extrusion(self, context):
@@ -269,7 +433,9 @@ class GameAssetWorkflowServices:
             self.state.resolved_cage_extrusion = default_extrusion
             return
 
-        source_object = self.store.get_object(self.state.temporary_object_name) or self.store.get_object(self.state.game_asset_name)
+        source_object = self.store.get_object(self.state.temporary_object_name) or self.store.get_object(
+            self.state.game_asset_name
+        )
         target_object = self.store.get_object(self.state.game_asset_name)
 
         self.state.resolved_cage_extrusion = BakingUtils.calculate_auto_cage_extrusion(
@@ -290,6 +456,7 @@ class GameAssetWorkflowServices:
         temporary_object = self.store.get_object(self.state.temporary_object_name)
         game_asset = self.store.get_object(self.state.game_asset_name)
         normal_image = self.store.get_created_image("normal")
+
         BakingUtils.bake_normal_selected_to_active(
             context=context,
             source_obj=temporary_object or game_asset,
@@ -298,6 +465,7 @@ class GameAssetWorkflowServices:
             extrusion=self._resolved_cage_extrusion(context),
             margin=self.state.bake_margin,
         )
+
         if scene.gameready_flip_y_normal:
             ImageUtils.flip_normal_map_y(normal_image, scene=scene)
 
@@ -307,6 +475,7 @@ class GameAssetWorkflowServices:
     def bake_emit_channel(self, context, image_key: str, material_channel: str):
         temporary_object = self.store.get_object(self.state.temporary_object_name)
         source_object = temporary_object or self.store.get_object(self.state.game_asset_name)
+
         BakingUtils.prepare_object_materials_for_emit_bake(source_object, material_channel)
         self._bake_selected_to_active(context, image_key, bake_mode="EMIT")
 
@@ -316,9 +485,11 @@ class GameAssetWorkflowServices:
             if bake_mode == "EMIT"
             else BakingUtils.bake_ao_selected_to_active
         )
+
         bake_call(
             context=context,
-            source_obj=self.store.get_object(self.state.temporary_object_name) or self.store.get_object(self.state.game_asset_name),
+            source_obj=self.store.get_object(self.state.temporary_object_name)
+            or self.store.get_object(self.state.game_asset_name),
             target_obj=self.store.get_object(self.state.game_asset_name),
             target_image=self.store.get_created_image(image_key),
             extrusion=self._resolved_cage_extrusion(context),
@@ -329,6 +500,7 @@ class GameAssetWorkflowServices:
         scene = context.scene
         alpha_image = self.store.get_created_image("base_color_alpha_tmp")
         final_image = self.store.get_created_image("base_color")
+
         ImageUtils.combine_rgb_and_alpha_images(
             self.store.get_created_image("base_color_rgb_tmp"),
             alpha_image,
@@ -356,6 +528,7 @@ class GameAssetWorkflowServices:
     def export_files(self, context):
         scene = context.scene
         lod_count = scene.gameready_lod_count if scene.gameready_generate_lods else 0
+
         self.state.exported_file_paths = ExportUtils.export_object_and_lods(
             context=context,
             obj=self.store.get_object(self.state.game_asset_name),
@@ -370,17 +543,20 @@ class GameAssetWorkflowServices:
         game_asset = self.store.get_object(self.state.game_asset_name)
         if game_asset is not None:
             MaterialUtils.apply_normal_y_display_fix_to_object(game_asset)
+            self._refresh_baked_material_display(game_asset, context=context)
             MaterialUtils.refresh_material_preview_on_object(game_asset, context=context)
 
     def restore_blender_sss_preview(self, context):
         game_asset = self.store.get_object(self.state.game_asset_name)
         if game_asset is None:
             return
+
         MaterialUtils.apply_sss_preview_to_object(
             obj=game_asset,
             image=self.store.get_created_image("sss"),
             image_filepath=self.store.get_created_image_filepath("sss"),
         )
+        self._refresh_baked_material_display(game_asset, context=context)
         MaterialUtils.refresh_material_preview_on_object(game_asset, context=context)
 
     def _cleanup_temporary_helpers(self):
@@ -388,6 +564,7 @@ class GameAssetWorkflowServices:
             helper_object = self.store.get_object(helper_name)
             if helper_object is not None:
                 bpy.data.objects.remove(helper_object, do_unlink=True)
+
         self.state.temporary_helper_object_names = []
 
     def _cleanup_temporary_material_data(self):
@@ -397,15 +574,19 @@ class GameAssetWorkflowServices:
     def finalize_scene(self, context):
         self.restore_source_materials_after_bake(context)
         self._cleanup_temporary_helpers()
+
         game_asset = self.store.get_object(self.state.game_asset_name)
         temporary_object = self.store.get_object(self.state.temporary_object_name)
+
         SelectionCoordinator.select_single(context, game_asset)
         if game_asset is not None:
+            self._refresh_baked_material_display(game_asset, context=context)
             MaterialUtils.refresh_material_preview_on_object(game_asset, context=context)
+
         if temporary_object is not None:
             bpy.data.objects.remove(temporary_object, do_unlink=True)
-            self.state.temporary_object_name = ""
 
+        self.state.temporary_object_name = ""
         self._cleanup_temporary_material_data()
 
     def safe_cleanup(self, context):
@@ -413,6 +594,7 @@ class GameAssetWorkflowServices:
             self.restore_source_materials_after_bake(context)
         except Exception:
             pass
+
         try:
             BakingUtils.restore_render_visibility(self.state.visibility_state)
         except Exception:
@@ -430,7 +612,7 @@ class GameAssetWorkflowServices:
                 bpy.data.objects.remove(temporary_object, do_unlink=True)
             except Exception:
                 pass
-            self.state.temporary_object_name = ""
+        self.state.temporary_object_name = ""
 
         try:
             self._cleanup_temporary_material_data()
