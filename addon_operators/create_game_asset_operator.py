@@ -1,9 +1,11 @@
 # Purpose: create game asset operator module.
 # Example: import create_game_asset_operator
+
 import bpy
 
 from ..scripts.debug_utils import DebugConsole
 from ..scripts.progress_utils import ProgressUtils
+
 from .create_asset_preconditions import CreateAssetPreconditions
 from .models import WorkflowState
 from .workflow_services import GameAssetWorkflowServices
@@ -14,7 +16,7 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
     bl_idname = "gameready.create_game_asset"
     bl_label = "Create Game Asset"
     bl_description = "Create a game asset from the active object"
-    bl_options = {'REGISTER', 'UNDO'}
+    bl_options = {"REGISTER", "UNDO"}
 
     _timer = None
     _steps = None
@@ -37,15 +39,24 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
     def invoke(self, context, event):
         scene = context.scene
         active_object = context.active_object
+
+        # Allow a custom output/title without renaming the source object.
+        source_name = active_object.name
+        if getattr(scene, "gameready_use_custom_title", False):
+            custom = (getattr(scene, "gameready_custom_title", "") or "").strip()
+            if custom:
+                source_name = custom
+
         self._state = WorkflowState(
-            source_object_name=active_object.name,
+            source_object_name=source_name,
             selected_object_names=[obj.name for obj in context.selected_objects],
             active_object_name=active_object.name,
             bake_margin=max(1, int(scene.gameready_texture_size) // 8),
         )
-        self._services = GameAssetWorkflowServices(self._state)
 
+        self._services = GameAssetWorkflowServices(self._state)
         self._steps = WorkflowStepFactory(self._services).build(context)
+
         self._completed_weight = 0.0
         self._total_weight = sum(step.weight for step in self._steps) or 1.0
 
@@ -54,28 +65,31 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
 
         self._timer = context.window_manager.event_timer_add(0.1, window=context.window)
         context.window_manager.modal_handler_add(self)
-        return {'RUNNING_MODAL'}
+
+        return {"RUNNING_MODAL"}
 
     def modal(self, context, event):
-        if event.type == 'ESC':
+        if event.type == "ESC":
             self._services.safe_cleanup(context)
             self._finish_modal(context)
             ProgressUtils.cancel(context, title="Cancelled", detail="Game asset creation was cancelled.")
-            return {'CANCELLED'}
+            return {"CANCELLED"}
 
-        if event.type != 'TIMER':
-            return {'RUNNING_MODAL'}
+        if event.type != "TIMER":
+            return {"RUNNING_MODAL"}
 
         if not self._steps:
             self._services.safe_cleanup(context)
             result_message = self._build_result_message()
             self._finish_modal(context)
+
             ProgressUtils.finish(context, title="Finished", detail="The asset is ready.")
-            bpy.ops.gameready.result_dialog('INVOKE_DEFAULT', message=result_message)
-            return {'FINISHED'}
+            bpy.ops.gameready.result_dialog("INVOKE_DEFAULT", message=result_message)
+            return {"FINISHED"}
 
         current_step = self._steps.pop(0)
         self._announce_step(context, current_step)
+
         step_started_at = DebugConsole.log_step_start(current_step.title, current_step.function)
 
         try:
@@ -85,10 +99,11 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
             self._services.safe_cleanup(context)
             self._finish_modal(context)
             ProgressUtils.cancel(context, title="Failed", detail=f"{current_step.title} failed: {exception}")
-            self.report({'ERROR'}, f"{current_step.title} failed: {exception}")
-            return {'CANCELLED'}
+            self.report({"ERROR"}, f"{current_step.title} failed: {exception}")
+            return {"CANCELLED"}
 
         DebugConsole.log_step_complete(current_step.title, step_started_at)
+
         self._completed_weight += current_step.weight
         ProgressUtils.update(
             context,
@@ -97,7 +112,7 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
             detail=current_step.completed_detail,
         )
         ProgressUtils.flush_ui()
-        return {'RUNNING_MODAL'}
+        return {"RUNNING_MODAL"}
 
     def _announce_step(self, context, step):
         ProgressUtils.update(
@@ -136,6 +151,8 @@ class GAMEREADY_OT_create_game_asset(bpy.types.Operator):
         lines.append("Exported files:")
         for export_path in self._state.exported_file_paths[:8]:
             lines.append(f"• {export_path}")
+
         if len(self._state.exported_file_paths) > 8:
             lines.append(f"• ... and {len(self._state.exported_file_paths) - 8} more")
+
         return "\n".join(lines)
