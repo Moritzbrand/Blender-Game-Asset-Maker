@@ -1,7 +1,6 @@
 # Purpose: material utils module.
 # Example: import material_utils
 import os
-
 import bpy
 
 from .image_utils import ImageUtils
@@ -10,6 +9,78 @@ from .image_utils import ImageUtils
 class BakeCoordinatePreparationResult:
     def __init__(self, helper_object_names=None):
         self.helper_object_names = helper_object_names or []
+
+
+class DeferredMaterialPreviewRefreshService:
+    _callbacks_by_key = {}
+    _state_by_key = {}
+
+    @classmethod
+    def schedule(
+        cls,
+        object_name,
+        remove_emit_bake_proxy_nodes=False,
+        attempts=2,
+        interval=0.05,
+    ):
+        if not object_name:
+            return False
+
+        schedule_key = str(object_name)
+        cls.cancel(schedule_key)
+
+        cls._state_by_key[schedule_key] = {
+            "remove_emit_bake_proxy_nodes": bool(remove_emit_bake_proxy_nodes),
+            "remaining_attempts": max(1, int(attempts)),
+            "interval": float(interval),
+        }
+
+        def callback():
+            return cls._run_refresh_pass(schedule_key)
+
+        cls._callbacks_by_key[schedule_key] = callback
+        bpy.app.timers.register(callback, first_interval=0.0)
+        return True
+
+    @classmethod
+    def cancel(cls, schedule_key):
+        schedule_key = str(schedule_key)
+        callback = cls._callbacks_by_key.pop(schedule_key, None)
+        cls._state_by_key.pop(schedule_key, None)
+        if callback is None:
+            return False
+
+        try:
+            if bpy.app.timers.is_registered(callback):
+                bpy.app.timers.unregister(callback)
+        except Exception:
+            pass
+        return True
+
+    @classmethod
+    def _run_refresh_pass(cls, schedule_key):
+        refresh_state = cls._state_by_key.get(schedule_key)
+        if refresh_state is None:
+            cls._callbacks_by_key.pop(schedule_key, None)
+            return None
+
+        obj = bpy.data.objects.get(schedule_key)
+        if obj is None:
+            cls.cancel(schedule_key)
+            return None
+
+        MaterialUtils.refresh_material_preview_on_object(
+            obj,
+            context=bpy.context,
+            remove_emit_bake_proxy_nodes=refresh_state["remove_emit_bake_proxy_nodes"],
+        )
+
+        refresh_state["remaining_attempts"] -= 1
+        if refresh_state["remaining_attempts"] <= 0:
+            cls.cancel(schedule_key)
+            return None
+
+        return refresh_state["interval"]
 
 
 class MaterialUtils:
@@ -46,6 +117,53 @@ class MaterialUtils:
             if node.bl_idname == "ShaderNodeBsdfPrincipled":
                 return node
         return None
+
+    @staticmethod
+    def _iter_unique_materials_on_object(obj):
+        if obj is None or obj.type != 'MESH':
+            return
+
+        seen_material_pointers = set()
+        for material_slot in obj.material_slots:
+            material = material_slot.material
+            if material is None:
+                continue
+
+            material_pointer = material.as_pointer()
+            if material_pointer in seen_material_pointers:
+                continue
+            seen_material_pointers.add(material_pointer)
+            yield material
+
+    @staticmethod
+    def _tag_id_for_display_update(data_block):
+        if data_block is None:
+            return
+
+        try:
+            data_block.update_tag(refresh={'DATA'})
+            return
+        except Exception:
+            pass
+
+        try:
+            data_block.update_tag()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _request_context_evaluation(context):
+        if context is None:
+            return
+
+        view_layer = getattr(context, "view_layer", None)
+        if view_layer is None:
+            return
+
+        try:
+            view_layer.update()
+        except Exception:
+            pass
 
     @staticmethod
     def _is_emit_bake_proxy_node(node):
@@ -92,22 +210,13 @@ class MaterialUtils:
         except Exception:
             pass
 
-        try:
-            node_tree.update_tag()
-        except Exception:
-            pass
+        MaterialUtils._tag_id_for_display_update(node_tree)
+        MaterialUtils._tag_id_for_display_update(material)
 
-        try:
-            material.update_tag(refresh={'DATA'})
-        except Exception:
-            pass
+        if context is not None and getattr(context, "scene", None) is not None:
+            MaterialUtils._tag_id_for_display_update(context.scene)
 
-        if context is not None:
-            try:
-                context.view_layer.update()
-            except Exception:
-                pass
-
+        MaterialUtils._request_context_evaluation(context)
         return True
 
     @staticmethod
@@ -145,6 +254,14 @@ class MaterialUtils:
                 pass
 
     @staticmethod
+    def _refresh_object_display_data(obj):
+        if obj is None:
+            return
+
+        MaterialUtils._tag_id_for_display_update(obj)
+        MaterialUtils._tag_id_for_display_update(getattr(obj, "data", None))
+
+    @staticmethod
     def _refresh_material_preview(material, context=None, remove_emit_bake_proxy_nodes=False):
         MaterialUtils._refresh_image_texture_nodes(material)
         MaterialUtils._restore_principled_surface_output_link(
@@ -160,18 +277,7 @@ class MaterialUtils:
             return 0
 
         refreshed_count = 0
-        seen_material_pointers = set()
-
-        for material_slot in obj.material_slots:
-            material = material_slot.material
-            if material is None:
-                continue
-
-            material_pointer = material.as_pointer()
-            if material_pointer in seen_material_pointers:
-                continue
-            seen_material_pointers.add(material_pointer)
-
+        for material in MaterialUtils._iter_unique_materials_on_object(obj):
             MaterialUtils._refresh_material_preview(
                 material,
                 context=context,
@@ -179,7 +285,27 @@ class MaterialUtils:
             )
             refreshed_count += 1
 
+        MaterialUtils._refresh_object_display_data(obj)
+        MaterialUtils._request_context_evaluation(context)
+        MaterialUtils._tag_context_areas_for_redraw(context)
         return refreshed_count
+
+    @staticmethod
+    def schedule_material_preview_refresh_on_object(
+        obj,
+        remove_emit_bake_proxy_nodes=False,
+        attempts=2,
+        interval=0.05,
+    ):
+        if obj is None or obj.type != 'MESH':
+            return False
+
+        return DeferredMaterialPreviewRefreshService.schedule(
+            object_name=obj.name,
+            remove_emit_bake_proxy_nodes=remove_emit_bake_proxy_nodes,
+            attempts=attempts,
+            interval=interval,
+        )
 
     @staticmethod
     def _refresh_material_output(material, remove_emit_bake_proxy_nodes=False):

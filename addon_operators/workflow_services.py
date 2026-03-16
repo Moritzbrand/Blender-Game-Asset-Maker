@@ -403,16 +403,24 @@ class GameAssetWorkflowServices:
     def finalize_scene(self, context):
         self.restore_source_materials_after_bake(context)
         self._cleanup_temporary_helpers()
+
         game_asset = self.store.get_object(self.state.game_asset_name)
         temporary_object = self.store.get_object(self.state.temporary_object_name)
-        SelectionCoordinator.select_single(context, game_asset)
-        if game_asset is not None:
-            MaterialUtils.refresh_material_preview_on_object(game_asset, context=context)
+
         if temporary_object is not None:
             bpy.data.objects.remove(temporary_object, do_unlink=True)
             self.state.temporary_object_name = ""
 
         self._cleanup_temporary_material_data()
+
+        SelectionCoordinator.select_single(context, game_asset)
+        if game_asset is not None:
+            MaterialUtils.refresh_material_preview_on_object(game_asset, context=context)
+            MaterialUtils.schedule_material_preview_refresh_on_object(
+                game_asset,
+                attempts=3,
+                interval=0.05,
+            )
 
     def safe_cleanup(self, context):
         try:
