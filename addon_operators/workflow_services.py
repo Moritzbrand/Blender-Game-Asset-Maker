@@ -397,9 +397,13 @@ class GameAssetWorkflowServices:
             for obj in BakingUtils.get_all_rendered_objects(context)
             if obj not in {temporary_object, game_asset}
         ]
+        bake_participants = [obj for obj in (temporary_object, game_asset) if obj is not None]
 
-        self.state.visibility_state = BakingUtils.store_render_visibility(objects_to_hide)
+        self.state.visibility_state = BakingUtils.store_render_visibility(
+            objects_to_hide + bake_participants
+        )
         BakingUtils.hide_from_render(objects_to_hide)
+        BakingUtils.show_in_render(bake_participants)
 
     def ensure_source_materials_for_bake(self, context):
         source_object = self.store.get_object(self.state.temporary_object_name)
