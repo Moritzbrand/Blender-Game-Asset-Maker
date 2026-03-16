@@ -292,9 +292,7 @@ class MaterialUtils:
         try:
             output_dir = bpy.path.abspath(scene.gameready_output_dir)
             MaterialUtils._ensure_dir(output_dir)
-            image_path = os.path.join(output_dir, f"{image_name}.png")
-            image.filepath_raw = image_path
-            image.filepath = image_path
+            image.filepath_raw = os.path.join(output_dir, f"{image_name}.png")
             image.file_format = 'PNG'
         except Exception:
             pass
