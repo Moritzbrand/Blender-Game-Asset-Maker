@@ -111,12 +111,48 @@ class MaterialUtils:
         return True
 
     @staticmethod
+    def _refresh_image_texture_nodes(material):
+        if material is None or not material.use_nodes or material.node_tree is None:
+            return 0
+
+        refreshed_count = 0
+        for node in material.node_tree.nodes:
+            if node.bl_idname != "ShaderNodeTexImage":
+                continue
+
+            image = getattr(node, "image", None)
+            if image is None:
+                continue
+
+            ImageUtils.refresh_display_image(image)
+            refreshed_count += 1
+
+        return refreshed_count
+
+    @staticmethod
+    def _tag_context_areas_for_redraw(context):
+        if context is None:
+            return
+
+        screen = getattr(context, "screen", None)
+        if screen is None:
+            return
+
+        for area in screen.areas:
+            try:
+                area.tag_redraw()
+            except Exception:
+                pass
+
+    @staticmethod
     def _refresh_material_preview(material, context=None, remove_emit_bake_proxy_nodes=False):
+        MaterialUtils._refresh_image_texture_nodes(material)
         MaterialUtils._restore_principled_surface_output_link(
             material,
             context=context,
             remove_emit_bake_proxy_nodes=remove_emit_bake_proxy_nodes,
         )
+        MaterialUtils._tag_context_areas_for_redraw(context)
 
     @staticmethod
     def refresh_material_preview_on_object(obj, context=None, remove_emit_bake_proxy_nodes=False):

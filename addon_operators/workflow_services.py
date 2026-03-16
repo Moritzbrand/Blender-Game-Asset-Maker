@@ -112,6 +112,10 @@ class GameAssetWorkflowServices:
             cursor.matrix = previous_cursor_matrix
 
 
+    def _isolate_temporary_source_materials(self, objects):
+        for obj in objects:
+            MaterialUtils.make_materials_single_user(obj)
+
     def prepare_temporary_source(self, context):
         scene = context.scene
         source_objects = (
@@ -124,6 +128,8 @@ class GameAssetWorkflowServices:
 
         self.state.temporary_helper_object_names = []
         if scene.gameready_bake_textures:
+            self._isolate_temporary_source_materials(temporary_objects)
+
             for original_object, temporary_object in zip(source_objects, temporary_objects):
                 result = MaterialUtils.prepare_bake_coordinate_nodes_for_source_object(
                     context=context,

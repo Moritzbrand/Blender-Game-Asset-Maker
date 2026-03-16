@@ -61,10 +61,40 @@ class ImageUtils:
         return 15
 
     @classmethod
+    def refresh_display_image(cls, image):
+        cls.require_image(image, "image")
+
+        try:
+            image.update()
+        except Exception:
+            pass
+
+        try:
+            image.update_tag(refresh={'DATA'})
+        except Exception:
+            try:
+                image.update_tag()
+            except Exception:
+                pass
+
+        try:
+            image.gl_free()
+        except Exception:
+            pass
+
+        try:
+            image.gl_load()
+        except Exception:
+            pass
+
+        return image
+
+    @classmethod
     def save_image_if_possible(cls, image, scene=None):
         try:
             filepath = getattr(image, "filepath_raw", "") or getattr(image, "filepath", "")
             if not filepath:
+                cls.refresh_display_image(image)
                 return
         except Exception:
             return
@@ -75,6 +105,7 @@ class ImageUtils:
                 image.save()
             except Exception:
                 pass
+            cls.refresh_display_image(image)
             return
 
         settings = scene.render.image_settings
@@ -123,6 +154,8 @@ class ImageUtils:
                 settings.color_management = backup["color_management"]
             except Exception:
                 pass
+
+        cls.refresh_display_image(image)
 
     @classmethod
     def write_pixels_to_image(cls, image, image_pixels, scene=None):
